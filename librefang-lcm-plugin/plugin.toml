@@ -1,0 +1,29 @@
+name = "lcm"
+version = "0.2.0"
+description = "LCM — lossless context memory: persists every turn to SQLite with FTS5 search, DAG summaries, compact hook, and assemble hook for context window management."
+author = "librefang"
+persistent_subprocess = true
+
+[hooks]
+runtime = "python"
+timeout_secs = 15
+on_failure = "warn"
+priority = 0
+ingest = "hooks/ingest.py"
+after_turn = "hooks/after_turn.py"
+bootstrap = "hooks/bootstrap.py"
+compact = "hooks/compact.py"
+assemble = "hooks/assemble.py"
+
+[[requires]]
+binary = "python3"
+install_hint = "Install Python 3.9+"
+
+[[requires]]
+binary = "lcm"
+install_hint = "npm install -g @lossless-claude/lcm"
+optional = false
+
+[i18n.zh]
+name = "无损上下文"
+description = "LCM — 无损跨会话记忆：每轮对话持久化到SQLite，支持FTS5搜索、DAG摘要、压缩和上下文窗口管理。"
