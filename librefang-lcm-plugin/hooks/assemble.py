@@ -176,9 +176,8 @@ def _structured_summaries(
     if not middle:
         return head + pinned + tail
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
     try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(DB_PATH))
         conn.execute("PRAGMA journal_mode=WAL")
         _ensure_tables(conn)
