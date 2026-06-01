@@ -1,0 +1,296 @@
+# Channel Adapters
+
+LibreFang connects to messaging platforms through **45 channel adapters**, allowing users to interact with their agents across every major communication platform. Adapters span consumer messaging, enterprise collaboration, social media, community platforms, privacy-focused protocols, generic webhooks, and extensible sidecar processes.
+
+All adapters share a common foundation: graceful shutdown via `watch::channel`, exponential backoff on connection failures, `Zeroizing<String>` for secrets, automatic message splitting for platform limits, per-channel model/prompt overrides, DM/group policy enforcement, per-user rate limiting, and output formatting (Markdown, TelegramHTML, SlackMrkdwn, PlainText).
+
+## Table of Contents
+
+- [Core Messaging](/integrations/channels/core) — Telegram, Discord, Slack, WhatsApp, WeChat, Signal, Matrix, Email, WebChat
+- [Enterprise](/integrations/channels/enterprise) — Teams, Mattermost, Google Chat, Webex, Feishu, Zulip, Flock, Twist, Pumble, Guilded
+- [Social & Community](/integrations/channels/social) — Reddit, Mastodon, Bluesky, Twitch, Gitter, Revolt, Keybase
+- [Integrations & Protocols](/integrations/channels/integrations) — LINE, DingTalk, QQ, WeCom, Threema, IRC, XMPP, Ntfy, Gotify, Nextcloud, Mumble, Webhook, Voice
+- [Custom Adapters](/integrations/channels/custom) — Writing your own adapter
+
+---
+
+## Channel Configuration
+
+<Note>
+All channel credentials can be stored using any of the four methods (highest priority first):
+- **System environment variable**: `export TELEGRAM_BOT_TOKEN=...`
+- **Encrypted vault** (recommended): `librefang vault set TELEGRAM_BOT_TOKEN`
+- **.env file**: `librefang config set-key telegram` or edit `~/.librefang/.env` directly
+- **secrets.env**: Written by the dashboard "Set API Key" button to `~/.librefang/secrets.env`
+
+The examples below show all four methods. In production, use the vault.
+</Note>
+
+Most channel configurations live in `~/.librefang/config.toml` under the `[channels]` section. Each in-process channel is a subsection. Telegram is now sidecar-only and uses `[[sidecar_channels]]` instead — Python (default) or Rust (since #5831; see [Rust Telegram sidecar adapter](/architecture/rust-telegram-sidecar)):
+
+```toml
+# Telegram via Python sidecar (default)
+[[sidecar_channels]]
+name = "telegram"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.telegram"]
+channel_type = "telegram"
+[sidecar_channels.env]
+TELEGRAM_BOT_TOKEN = "..."
+# ALLOWED_USERS = "123456789,@alice"
+
+# Telegram via Rust sidecar (since #5831 — no Python runtime required)
+# [[sidecar_channels]]
+# name = "telegram"
+# command = "/abs/path/to/target/release/librefang-sidecar-telegram"
+# channel_type = "telegram"
+# [sidecar_channels.env]
+# TELEGRAM_BOT_TOKEN = "..."
+
+# Discord (sidecar)
+[[sidecar_channels]]
+name = "discord"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.discord"]
+channel_type = "discord"
+[sidecar_channels.env]
+DISCORD_BOT_TOKEN = "..."
+
+# Slack (sidecar)
+[[sidecar_channels]]
+name = "slack"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.slack"]
+channel_type = "slack"
+[sidecar_channels.env]
+SLACK_APP_TOKEN = "xapp-..."
+SLACK_BOT_TOKEN = "xoxb-..."
+
+# Enterprise example (Teams — sidecar)
+[[sidecar_channels]]
+name = "teams"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.teams"]
+channel_type = "teams"
+[sidecar_channels.env]
+TEAMS_APP_ID = "00000000-0000-0000-0000-000000000000"
+TEAMS_WEBHOOK_PORT = "8459"
+
+# Social example (Mastodon — sidecar)
+[[sidecar_channels]]
+name = "mastodon"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.mastodon"]
+channel_type = "mastodon"
+[sidecar_channels.env]
+MASTODON_INSTANCE_URL = "https://mastodon.social"
+```
+
+### Common Fields
+
+- `bot_token_env` / `token_env` -- The environment variable holding the bot/access token. LibreFang reads the token from this env var at startup. All secrets are stored as `Zeroizing<String>` and wiped from memory on drop.
+- `default_agent` -- The agent name (or ID) that receives messages when no specific routing applies.
+- `allowed_users` -- Optional list of platform user IDs allowed to interact. Empty means allow all. For Telegram specifically, entries can be numeric user IDs (`"123456789"`), usernames (`"alice"`), or usernames prefixed with `@` (`"@alice"`); matching is case-insensitive.
+- `overrides` -- Optional per-channel behavior overrides (see [Channel Overrides](#channel-overrides) below).
+
+### Environment Variables Reference (Core Channels)
+
+| Channel | Required Env Vars |
+|---------|-------------------|
+| Telegram | `TELEGRAM_BOT_TOKEN` |
+| Discord | `DISCORD_BOT_TOKEN` |
+| Slack | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` |
+| WhatsApp | `WA_ACCESS_TOKEN`, `WA_PHONE_ID`, `WA_VERIFY_TOKEN` |
+| Matrix | `MATRIX_TOKEN` |
+| Email | `EMAIL_PASSWORD` |
+
+Env vars for each channel are listed in their respective setup sections below.
+
+---
+
+## Channel Overrides
+
+`ChannelOverrides` let an agent customize its behaviour per-channel. Post-sidecar migration the **channel-level** layer is gone (the `[channels.<name>.overrides]` sub-table lived on the deleted in-process `ChannelsConfig`); only **agent-level overrides** in `agent.toml` survive. Most knobs that the old channel-level table exposed are now set per-sidecar through `[sidecar_channels.env]` instead — see [the migration mapping in the channels configuration guide](/configuration/channels#channel-overrides-legacy--removed).
+
+- **Agent-level** in `agent.toml` — applies only to that specific agent on every channel. Add a top-level `[channel_overrides]` section.
+
+**Resolution order** (post-migration): agent-level → sidecar env var → built-in default. Whichever sets the field wins.
+
+```toml
+# agent.toml — per-agent override (e.g. "this agent answers every DM")
+[channel_overrides]
+dm_policy = "always"
+group_policy = "trigger_only"
+group_trigger_patterns = ["(?i)\\bmy-bot\\b"]
+```
+
+```toml
+# config.toml — channel-level overrides (HISTORICAL — no longer
+# accepted). Pre-#5463, every agent on that channel inherited these
+# defaults. The block is shown for migration reference only; set the
+# equivalent on the agent (`agent.toml [channel_overrides]`) or on
+# the sidecar (`[sidecar_channels.env]` env vars like `*_DM_POLICY`).
+[channels.discord.overrides]
+model = "gemini-2.5-flash"
+system_prompt = "You are a concise Discord assistant. Keep replies under 200 words."
+dm_policy = "respond"
+group_policy = "mention_only"
+rate_limit_per_user = 10
+threading = true
+output_format = "markdown"
+usage_footer = "compact"
+```
+
+### Override Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | `Option<String>` | Agent default | Override the LLM model for this channel. |
+| `system_prompt` | `Option<String>` | Agent default | Override the system prompt for this channel. |
+| `dm_policy` | `DmPolicy` | `Respond` | How to handle direct messages. |
+| `group_policy` | `GroupPolicy` | `MentionOnly` | How to handle group/channel messages. |
+| `rate_limit_per_user` | `u32` | `0` (unlimited) | Max messages per minute per user. |
+| `threading` | `bool` | `false` | Send replies as thread responses (platforms that support it). |
+| `output_format` | `Option<OutputFormat>` | `Markdown` | Output format for this channel. |
+| `usage_footer` | `Option<UsageFooterMode>` | None | Whether to append token usage to responses. |
+
+---
+
+## Formatter, Rate Limiter, and Policies
+
+### Output Formatter
+
+The `formatter` module (`librefang-channels/src/formatter.rs`) converts Markdown output from the LLM into platform-native formats:
+
+| OutputFormat | Target | Notes |
+|-------------|--------|-------|
+| `Markdown` | Standard Markdown | Default; passed through as-is. |
+| `TelegramHtml` | Telegram HTML subset | Converts `**bold**` to `<b>`, `` `code` `` to `<code>`, etc. |
+| `SlackMrkdwn` | Slack mrkdwn | Converts `**bold**` to `*bold*`, links to `<url\|text>`, etc. |
+| `PlainText` | Plain text | Strips all formatting. |
+
+### Per-User Rate Limiter
+
+The `ChannelRateLimiter` (`librefang-channels/src/rate_limiter.rs`) uses a `DashMap` to track per-user message counts. When `rate_limit_per_user` is set on a channel's overrides, the limiter enforces a sliding-window cap of N messages per minute. Excess messages receive a polite rejection.
+
+### DM Policy
+
+Controls how the adapter handles direct messages:
+
+| DmPolicy | Behavior |
+|----------|----------|
+| `Respond` | Respond to all DMs (default). |
+| `AllowedOnly` | Only respond to DMs from users in `allowed_users`. |
+| `Ignore` | Silently drop all DMs. |
+
+### Group Policy
+
+Controls how the adapter handles messages in group chats, channels, and rooms:
+
+| GroupPolicy | Behavior |
+|-------------|----------|
+| `All` | Respond to every message in the group. |
+| `MentionOnly` | Only respond when the bot is @mentioned (default). |
+| `CommandsOnly` | Only respond to `/command` messages. |
+| `Ignore` | Silently ignore all group messages. |
+
+Policy enforcement happens in `dispatch_message()` before the message reaches the agent loop. This means ignored messages consume zero LLM tokens.
+
+---
+
+## Agent Routing
+
+The `AgentRouter` determines which agent receives an incoming message. The routing logic is:
+
+1. **Per-channel default**: Each channel config has a `default_agent` field. Messages from that channel go to that agent.
+2. **User-agent binding**: If a user has previously been associated with a specific agent (via commands or configuration), messages from that user route to that agent.
+3. **Command prefix**: Users can switch agents by sending a command like `/agent coder` in the chat. Subsequent messages will be routed to the "coder" agent.
+4. **Fallback**: If no routing applies, messages go to the first available agent.
+
+When a channel has `default_agent` configured, messages from that channel bypass semantic and keyword routing and go directly to the specified agent. Users can still switch agents manually via the `/agent` command.
+
+---
+
+## Outbound Tagging
+
+Set `prefix_agent_name` in `ChannelOverrides` to prepend the agent's name to every outbound message. Useful when several agents share one channel — readers can tell at a glance which agent replied.
+
+| Style | Wraps reply as |
+|---|---|
+| `Off` (default) | unchanged — byte-identical to the agent's text |
+| `Bracket` | `[agent-name] reply text` |
+| `BoldBracket` | `**[agent-name]** reply text` (bold rendering depends on the channel's output format) |
+
+Set `prefix_agent_name` in `[channel_overrides]` on the agent manifest (`agent.toml`); the pre-migration `[channels.<name>.overrides]` location is no longer accepted.
+
+```toml
+# agent.toml
+[channel_overrides]
+prefix_agent_name = "BoldBracket"
+```
+
+The wrap is applied once on every non-streaming success path (`auto_reply`, kernel-streaming-with-status accumulated, streaming-fallback `buffered_text`, non-streaming fallback, retry after re-resolution, `dispatch_with_blocks`). Streaming tee (where each chunk is forwarded as it arrives) does **not** wrap — the prefix would interleave with chunk boundaries.
+
+## Signal Plain-Text Default
+
+Signal output defaults to `OutputFormat::PlainText` because `signal-cli` renders Markdown asterisks and underscores literally and leaving them in produced visible noise. The mapping lives in `default_output_format_for_channel("signal")` (`crates/librefang-channels/src/formatter.rs`) and is keyed off the `channel_type` string, so the default still applies after the sidecar migration — the `[[sidecar_channels]]` entry preserves `channel_type = "signal"`.
+
+Per-channel `output_format` overrides are not currently exposed on `[[sidecar_channels]]` (the `overrides` block lived on the in-process per-channel configs like `[channels.signal]` and was removed with them). Agents that need to send Markdown unmodified can flip the format on the agent side.
+
+Other channels keep their previous formatter defaults — only Signal flipped.
+
+## Reactions and Processing State
+
+Several adapters can show "I'm working on it" feedback by attaching a reaction to the user's message and removing it once the reply is sent. This is per-channel:
+
+- **Slack** — `reactions_enabled` toggle (env var `SLACK_REACTIONS`, default `true`). Adds 👀 on receive, replaces with ✅ on reply. `already_reacted` / `no_reaction` errors are silently ignored (fail-open).
+- **Feishu** — adds a `Typing` reaction on receive, removes it on reply send. Both calls are fire-and-forget; API failures `warn!` but never block message processing.
+
+Add the same on a custom adapter by spawning the reaction call as a `tokio::spawn` task and storing `(reaction_id, message_id)` in a per-chat map keyed off the chat id.
+
+## Feishu @Mention Preservation
+
+Feishu used to silently drop `@_user_N` placeholders from incoming text. The Feishu adapter now substitutes each placeholder with `@<display-name>` resolved from the mention payload (falling back to `open_id` when name is absent), and rewrites `@_all` to `@all`. Agents see the original conversational tone — "@alice can you check this?" — instead of bare punctuation.
+
+## Signal Media Attachments
+
+The retired in-process Rust adapter delivered `Image`, `Voice`, `Video`, `Audio`, `Animation`, `File`, `FileData`, and `MediaGroup` content blocks by downloading the media URL and base64-encoding it into `base64_attachments` on `POST /v2/send`. After the sidecar migration (`librefang.sidecar.adapters.signal`) anything other than text degrades to a `(Unsupported content type)` placeholder; restoring the base64 round-trip end-to-end through the sidecar is a follow-up.
+
+## WhatsApp DM / Group Policies
+
+After the sidecar migration (`librefang.sidecar.adapters.whatsapp`), the DM and group routing policies are configured via env vars on the `[[sidecar_channels]]` block:
+
+- `WHATSAPP_DM_POLICY`: `respond` (default) / `allowed_only` / `ignore`. `allowed_only` cross-references `WHATSAPP_ALLOWED_USERS`.
+- `WHATSAPP_GROUP_POLICY`: `all` (default) / `mention_only` / `commands_only` / `ignore`. `mention_only` looks for `WHATSAPP_BOT_PHONE` (with / without `@` + `+` strip) or `WHATSAPP_BOT_NAME` anywhere in the message text, case-insensitive.
+
+Voice / image / file outbound is supported in **Cloud API mode** (audio link, image link + caption, document link + filename, location) via the standard sidecar `Content` variants. **Web/QR (Baileys) mode** degrades non-text content to text (voice URL → `(Voice message: <url>)`, image without caption → `(Image — not supported in Web mode)`) matching the Rust adapter's gateway-mode fallback at `whatsapp.rs:493-519`.
+
+## Webhook `deliver_only` Mode
+
+The webhook sidecar can run as a pass-through: incoming payloads bypass the LLM entirely (no sanitizer, no rate limiter, no agent lookup) and forward straight to a target channel. Useful for push notifications and out-of-band alerts where you only need the message to land in Telegram / Slack / etc.
+
+```toml
+[[sidecar_channels]]
+name = "webhook"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webhook"]
+channel_type = "webhook"
+[sidecar_channels.env]
+WEBHOOK_LISTEN_PORT = "8461"
+WEBHOOK_DELIVER_ONLY = "1"
+WEBHOOK_DELIVER = "telegram:123456789"  # required when WEBHOOK_DELIVER_ONLY=1
+```
+
+`WEBHOOK_SECRET` goes in `~/.librefang/secrets.env`. The sidecar **fail-closes at startup** when `WEBHOOK_DELIVER_ONLY=1` but `WEBHOOK_DELIVER` is empty — the Rust validator at the same path only emitted a warn-and-continue, which meant inbound messages were silently dropped at runtime. The fan-out is signalled internally via `__deliver_only__` / `__deliver_target__` metadata on the emitted message; the kernel's `bridge.rs` routing reads those keys and short-circuits the LLM call.
+
+## Channel File Downloads
+
+Files attached on Telegram (and other channels) come through as **temporary authenticated URLs that the LLM cannot access directly**. The bridge now downloads them to a configurable directory and rewrites the message into local-path content blocks — non-image files become a `ContentBlock::Text` with the saved path (the agent calls `file_read`), images become `ContentBlock::ImageFile`.
+
+```toml
+[channels]
+file_download_dir = "/var/lib/librefang/channel-files"   # default: ~/.librefang/data/channel-files
+file_download_max_bytes = 33554432                       # default: 32 MiB
+```
+
+A startup sweep removes stale files older than 24 h; an additional probabilistic 1-in-256 sweep runs during downloads so a long-running daemon doesn't accumulate orphaned attachments.

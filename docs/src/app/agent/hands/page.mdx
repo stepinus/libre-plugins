@@ -1,0 +1,267 @@
+# Autonomous Hands
+
+LibreFang's core innovation — pre-built autonomous capability packages that run independently, executing tasks via LLM agents without human intervention.
+
+<Note>
+**Tip**: Hands are activated through the CLI or REST API. Each hand spawns one or more agents that can be chatted with interactively.
+</Note>
+
+---
+
+## Overview
+
+Hands are LibreFang's unique feature — they are autonomous agents that can:
+- Execute tasks automatically via LLM-powered agents
+- Handle complex multi-step workflows
+- Be configured through settings (provider, model, API keys)
+- Operate as single-agent or multi-agent systems
+
+---
+
+## Built-in Hands
+
+| Hand | Function | Type |
+|------|----------|------|
+| **Clip** | YouTube video download, clipping, subtitle generation | Multi-agent |
+| **Creator** | AI media studio — image, video, music, and speech generation | Multi-agent |
+| **Lead** | Daily lead discovery, enrichment, 0-100 scoring, deduplication | Multi-agent |
+| **Collector** | OSINT intelligence collection, change detection, knowledge graph | Multi-agent |
+| **Predictor** | Superforecasting engine, confidence intervals, contrarian patterns | Single-agent |
+| **Researcher** | Deep autonomous research, CRAAP credibility assessment, APA citation | Multi-agent |
+| **Twitter** | Autonomous X/Twitter account management, content formats, approval queue | Multi-agent |
+| **Browser** | Web automation via Playwright, mandatory purchase approval gate | Single-agent |
+| **Analytics** | Business analytics, KPI tracking, automated reporting | Multi-agent |
+| **ApiTester** | Automated API testing, contract validation, regression detection | Single-agent |
+| **DevOps** | CI/CD monitoring, deployment automation, infrastructure alerts, [auto-evolution](/agent/auto-evolution) (PR review + BMAD bug/feature pipeline) | Multi-agent |
+| **LinkedIn** | LinkedIn profile monitoring, outreach automation | Multi-agent |
+| **Reddit** | Reddit community monitoring, post scheduling, sentiment tracking | Multi-agent |
+| **Strategist** | Strategic analysis, competitive intelligence, scenario planning | Multi-agent |
+| **Trader** | Market data monitoring, signal generation, portfolio tracking | Multi-agent |
+
+---
+
+## CLI Commands
+
+### Hand Management
+
+```bash
+# List all available hands
+librefang hand list
+
+# Show currently active hand instances
+librefang hand active
+
+# Show status for a specific hand
+librefang hand status clip
+
+# Show detailed info about a hand
+librefang hand info clip
+
+# Reload hand definitions from disk
+librefang hand reload
+```
+
+### Activation Lifecycle
+
+```bash
+# Activate a hand
+librefang hand activate clip
+
+# Pause a running hand
+librefang hand pause clip
+
+# Resume a paused hand
+librefang hand resume clip
+
+# Deactivate a hand
+librefang hand deactivate clip
+```
+
+### Configuration
+
+```bash
+# Show current settings for a hand
+librefang hand settings clip
+
+# Set a configuration value
+librefang hand set clip stt_provider groq
+```
+
+### Interaction
+
+```bash
+# Chat with an active hand interactively
+librefang hand chat clip
+```
+
+### Dependencies
+
+```bash
+# Check dependency status
+librefang hand check-deps clip
+
+# Install missing dependencies
+librefang hand install-deps clip
+```
+
+### Local Installation
+
+```bash
+# Install a hand from a local directory
+librefang hand install ./my-hand
+```
+
+---
+
+## Hand Status
+
+| Status | Description |
+|--------|-------------|
+| Active | Running, agents spawned |
+| Paused | Paused, can be resumed |
+| Error | Error occurred, intervention needed |
+| Inactive | Not activated |
+
+---
+
+## HAND.toml Format
+
+### Single-Agent Hand
+
+```toml
+id = "my-hand"
+version = "1.0.0"
+name = "My Hand"
+description = "What this hand does"
+category = "content"
+icon = "M"
+tools = ["shell_exec", "web_fetch"]
+
+[[requires]]
+key = "ffmpeg"
+label = "FFmpeg must be installed"
+requirement_type = "binary"
+check_value = "ffmpeg"
+
+[[settings]]
+key = "quality"
+label = "Output Quality"
+setting_type = "select"
+default = "high"
+
+[[settings.options]]
+value = "high"
+label = "High (1080p)"
+
+[[settings.options]]
+value = "low"
+label = "Low (480p)"
+
+[agent]
+name = "my-hand-agent"
+description = "Processes tasks"
+system_prompt = "You are a task processing agent."
+
+[agent.model]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.7
+
+[dashboard]
+metrics = []
+
+[routing]
+aliases = ["my-hand", "process"]
+weak_aliases = ["task", "automate"]
+```
+
+### Multi-Agent Hand
+
+```toml
+id = "research"
+version = "2.0.0"
+name = "Research Hand"
+description = "Multi-agent research system"
+category = "content"
+tools = ["web_fetch"]
+
+[agents.planner]
+coordinator = true
+invoke_hint = "Use planner for task decomposition"
+name = "planner-agent"
+description = "Plans research tasks"
+model = "default"
+system_prompt = "You plan and coordinate research tasks."
+
+[agents.analyst]
+name = "analyst-agent"
+description = "Analyzes and synthesizes data"
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+system_prompt = "You analyze data and produce insights."
+
+[dashboard]
+metrics = []
+```
+
+### Legacy Flat Format (Backward Compatible)
+
+Single-agent hands can use flat fields instead of `[agent.model]`:
+
+```toml
+[agent]
+name = "my-agent"
+description = "Simple agent"
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.7
+system_prompt = "You are a helpful agent."
+```
+
+---
+
+## REST API Endpoints
+
+### Hand Discovery
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/hands` | GET | List all registered hands with status |
+| `/api/hands/active` | GET | List currently active hand instances |
+| `/api/hands/{hand_id}` | GET | Get details for a specific hand |
+| `/api/hands/{hand_id}/activate` | POST | Activate a hand (spawns agents) |
+| `/api/hands/{hand_id}/check-deps` | POST | Check dependency availability |
+| `/api/hands/{hand_id}/install-deps` | POST | Install missing dependencies |
+| `/api/hands/reload` | POST | Reload hand definitions from disk |
+
+### Hand Configuration
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/hands/{hand_id}/settings` | GET | Get current hand configuration |
+| `/api/hands/{hand_id}/settings` | PUT | Update hand configuration |
+
+### Instance Lifecycle
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/hands/instances/{id}/pause` | POST | Pause a running hand instance |
+| `/api/hands/instances/{id}/resume` | POST | Resume a paused hand instance |
+| `/api/hands/instances/{id}` | DELETE | Deactivate and remove a hand instance |
+| `/api/hands/instances/{id}/message` | POST | Send a message to a hand instance |
+
+### Example: Activate and Chat
+
+```bash
+# Activate
+curl -X POST http://127.0.0.1:4545/api/hands/clip/activate
+
+# Send a message
+curl -X POST http://127.0.0.1:4545/api/hands/instances/<instance-id>/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Download this video and generate subtitles"}'
+```
+
+---

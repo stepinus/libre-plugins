@@ -1,0 +1,514 @@
+# Agent Templates Catalog
+
+LibreFang provides **32 agent templates** from the [registry](https://github.com/librefang/librefang-registry/tree/main/agents). The `assistant` template is pre-installed; others can be installed from the dashboard. Each template is a ready-to-spawn `agent.toml` manifest located in the `agents/` directory. Templates cover software engineering, research, writing, business operations, personal productivity, and system tasks.
+
+All templates use `provider = "default"` and `model = "default"`, which means every agent inherits whichever model you have configured as your default in `~/.librefang/config.toml`. You can override the model at spawn time if needed.
+
+## Quick Start
+
+Spawn any template from the CLI:
+
+```bash
+librefang spawn orchestrator
+librefang spawn coder
+librefang spawn --template agents/writer/agent.toml
+```
+
+Spawn via the REST API:
+
+Spawn from a built-in template:
+
+```bash
+curl -X POST http://localhost:4545/api/agents \
+  -H "Content-Type: application/json" \
+  -d '{"template": "coder"}'
+```
+
+Spawn with a model override:
+
+```bash
+curl -X POST http://localhost:4545/api/agents \
+  -H "Content-Type: application/json" \
+  -d '{"template": "writer", "model": "claude-sonnet-4-20250514"}'
+```
+
+Send a message to a running agent:
+
+```bash
+curl -X POST http://localhost:4545/api/agents/{id}/message \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Write unit tests for the auth module"}'
+```
+
+---
+
+## Templates by Category
+
+Templates are organized by use case. Every template uses the default model provider. The table below lists each agent's description, tags, temperature, and max output tokens. Click an agent name to view its full `agent.toml` manifest in the registry.
+
+### Software Engineering
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [coder](https://github.com/librefang/librefang-registry/tree/main/agents/coder) | Expert software engineer. Reads, writes, and analyzes code. | python, write code, implement feature | 0.3 | 8192 |
+| [code-reviewer](https://github.com/librefang/librefang-registry/tree/main/agents/code-reviewer) | Senior code reviewer. Reviews PRs, identifies issues, suggests improvements with production standards. | best-practices, code review, review this pr | 0.3 | 4096 |
+| [debugger](https://github.com/librefang/librefang-registry/tree/main/agents/debugger) | Expert debugger. Traces bugs, analyzes stack traces, performs root cause analysis. | -- | 0.2 | 4096 |
+| [test-engineer](https://github.com/librefang/librefang-registry/tree/main/agents/test-engineer) | Quality assurance engineer. Designs test strategies, writes tests, validates correctness. | validation, test plan, write tests | 0.3 | 4096 |
+| [architect](https://github.com/librefang/librefang-registry/tree/main/agents/architect) | System architect. Designs software architectures, evaluates trade-offs, creates technical specifications. | planning, system design, software architecture | 0.3 | 8192 |
+| [security-auditor](https://github.com/librefang/librefang-registry/tree/main/agents/security-auditor) | Security specialist. Reviews code for vulnerabilities, checks configurations, performs threat modeling. | vulnerability, security audit, vulnerability review | 0.2 | 4096 |
+| [ops](https://github.com/librefang/librefang-registry/tree/main/agents/ops) | DevOps agent. Monitors systems, runs diagnostics, manages deployments. | -- | 0.2 | 2048 |
+| [devops-lead](https://github.com/librefang/librefang-registry/tree/main/agents/devops-lead) | DevOps lead. Manages CI/CD, infrastructure, deployments, monitoring, and incident response. | -- | 0.2 | 4096 |
+| [planner](https://github.com/librefang/librefang-registry/tree/main/agents/planner) | Project planner. Creates project plans, breaks down epics, estimates effort, identifies risks and dependencies. | -- | 0.3 | 8192 |
+
+### Research and Analysis
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [researcher](https://github.com/librefang/librefang-registry/tree/main/agents/researcher) | Research agent. Fetches web content and synthesizes information. | web, web research, investigate topic | 0.5 | 4096 |
+| [academic-researcher](https://github.com/librefang/librefang-registry/tree/main/agents/academic-researcher) | Academic research agent. Searches scholarly papers, summarizes findings, and generates literature reviews. | science, academic research, paper search | 0.3 | 8192 |
+| [analyst](https://github.com/librefang/librefang-registry/tree/main/agents/analyst) | Data analyst. Processes data, generates insights, creates reports. | -- | 0.4 | 4096 |
+| [data-scientist](https://github.com/librefang/librefang-registry/tree/main/agents/data-scientist) | Data scientist. Analyzes datasets, builds models, creates visualizations, performs statistical analysis. | -- | 0.3 | 4096 |
+
+### Writing and Documentation
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [writer](https://github.com/librefang/librefang-registry/tree/main/agents/writer) | Content writer. Creates documentation, articles, and technical writing. | -- | 0.7 | 4096 |
+| [doc-writer](https://github.com/librefang/librefang-registry/tree/main/agents/doc-writer) | Technical writer. Creates documentation, README files, API docs, tutorials, and architecture guides. | -- | 0.4 | 8192 |
+| [translator](https://github.com/librefang/librefang-registry/tree/main/agents/translator) | Multi-language translation agent for document translation, localization, and cross-cultural communication. | translation, languages, localization, multilingual, communication | 0.3 | 8192 |
+
+### Business and Communication
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [customer-support](https://github.com/librefang/librefang-registry/tree/main/agents/customer-support) | Customer support agent for ticket handling, issue resolution, and customer communication. | support, customer-service, tickets, helpdesk, communication | 0.3 | 4096 |
+| [sales-assistant](https://github.com/librefang/librefang-registry/tree/main/agents/sales-assistant) | Sales assistant agent for CRM updates, outreach drafting, pipeline management, and deal tracking. | deals, deal tracking, leads | 0.5 | 4096 |
+| [recruiter](https://github.com/librefang/librefang-registry/tree/main/agents/recruiter) | Recruiting agent for resume screening, candidate outreach, job description writing, and hiring pipeline management. | hr, candidate screening, recruiting outreach | 0.4 | 4096 |
+| [email-assistant](https://github.com/librefang/librefang-registry/tree/main/agents/email-assistant) | Email triage, drafting, scheduling, and inbox management agent. | email, communication, triage, drafting, scheduling | 0.4 | 8192 |
+| [meeting-assistant](https://github.com/librefang/librefang-registry/tree/main/agents/meeting-assistant) | Meeting notes, action items, agenda preparation, and follow-up tracking agent. | meetings, notes, action-items, agenda, follow-up | 0.3 | 8192 |
+| [social-media](https://github.com/librefang/librefang-registry/tree/main/agents/social-media) | Social media content creation, scheduling, and engagement strategy agent. | social-media, content, marketing, engagement, scheduling | 0.7 | 4096 |
+
+### Personal and Lifestyle
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [personal-finance](https://github.com/librefang/librefang-registry/tree/main/agents/personal-finance) | Personal finance agent for budget tracking, expense analysis, savings goals, and financial planning. | money, budget planning, expense analysis | 0.2 | 8192 |
+| [legal-assistant](https://github.com/librefang/librefang-registry/tree/main/agents/legal-assistant) | Legal assistant agent for contract review, legal research, compliance checking, and document drafting. | documents, legal review, contract review | 0.2 | 8192 |
+| [health-tracker](https://github.com/librefang/librefang-registry/tree/main/agents/health-tracker) | Wellness tracking agent for health metrics, medication reminders, fitness goals, and lifestyle habits. | tracking, health tracking, fitness tracking | 0.3 | 4096 |
+| [travel-planner](https://github.com/librefang/librefang-registry/tree/main/agents/travel-planner) | Trip planning agent for itinerary creation, booking research, budget estimation, and travel logistics. | vacation, trip itinerary, travel plan | 0.5 | 8192 |
+| [home-automation](https://github.com/librefang/librefang-registry/tree/main/agents/home-automation) | Smart home control agent for IoT device management, automation rules, and home monitoring. | home, smart home, home automation | 0.2 | 4096 |
+| [recipe-assistant](https://github.com/librefang/librefang-registry/tree/main/agents/recipe-assistant) | Cooking assistant that helps with recipes, meal plans, ingredient substitutions, and portion adjustments. | food, recipe helper, meal planner | 0.5 | 4096 |
+| [tutor](https://github.com/librefang/librefang-registry/tree/main/agents/tutor) | Teaching and explanation agent for learning, tutoring, and educational content creation. | education, teaching, tutoring, learning, explanation | 0.5 | 8192 |
+
+### System
+
+| Template | Description | Tags | Temp | Max Tokens |
+|----------|-------------|------|------|------------|
+| [assistant](https://github.com/librefang/librefang-registry/tree/main/agents/assistant) | General-purpose assistant agent. The default agent for everyday tasks, questions, and conversations. | general, assistant, default, multipurpose, conversation | 0.5 | 8192 |
+| [hello-world](https://github.com/librefang/librefang-registry/tree/main/agents/hello-world) | A friendly greeting agent that can read files, search the web, and answer everyday questions. | -- | 0.6 | 4096 |
+| [orchestrator](https://github.com/librefang/librefang-registry/tree/main/agents/orchestrator) | Meta-agent that decomposes complex tasks, delegates to specialist agents, and synthesizes results. | -- | 0.3 | 8192 |
+
+---
+
+## Understanding Temperature
+
+The `temperature` setting controls how deterministic or creative an agent's responses are. Templates set this value based on what each agent does:
+
+- **0.2** -- Precise and deterministic. Used by agents where accuracy matters most: `debugger`, `ops`, `security-auditor`, `devops-lead`, `personal-finance`, `legal-assistant`, `home-automation`.
+- **0.3** -- Analytical with slight flexibility. Used by most engineering and research agents: `coder`, `code-reviewer`, `test-engineer`, `architect`, `planner`, `data-scientist`, `academic-researcher`, `customer-support`, `translator`, `health-tracker`, `meeting-assistant`, `orchestrator`.
+- **0.4** -- Balanced analytical. Used by `analyst`, `doc-writer`, `email-assistant`, `recruiter`.
+- **0.5** -- General purpose. Used by `assistant`, `researcher`, `tutor`, `recipe-assistant`, `sales-assistant`, `travel-planner`.
+- **0.6** -- Conversational. Used by `hello-world`.
+- **0.7** -- Creative. Used by `writer` and `social-media`.
+
+---
+
+## Custom Templates
+
+The `agents/custom/` directory is reserved for your own agent templates. Create a new `agent.toml` file following the manifest format below.
+
+### Manifest Format
+
+```toml
+# Required fields
+name = "my-agent"
+version = "0.1.0"
+description = "What this agent does in one sentence."
+author = "your-name"
+module = "builtin:chat"
+
+# Optional metadata
+tags = ["tag1", "tag2"]
+
+# Model configuration (required)
+[model]
+provider = "default"                 # Uses your configured default provider
+model = "default"                    # Uses your configured default model
+max_tokens = 4096                    # Max output tokens per response
+temperature = 0.3                    # Creativity (0.0 = deterministic, 1.0 = creative)
+system_prompt = """Your agent's personality, capabilities, and instructions go here.
+Be specific about what the agent should and should not do."""
+
+# To use a specific provider instead of default, set the provider and model explicitly:
+# provider = "gemini"
+# model = "gemini-2.5-flash"
+# api_key_env = "GEMINI_API_KEY"
+
+# Optional fallback model (used when primary is unavailable)
+# [[fallback_models]]
+# provider = "groq"
+# model = "llama-3.3-70b-versatile"
+# api_key_env = "GROQ_API_KEY"
+
+# Optional schedule (for autonomous/background agents)
+[schedule]
+periodic = { cron = "every 5m" }                                     # Periodic execution
+# continuous = { check_interval_secs = 120 }                         # Continuous loop
+# proactive = { conditions = ["event:agent_spawned"] }               # Event-triggered
+
+# Resource limits
+[resources]
+max_llm_tokens_per_hour = 150000    # Token budget per hour
+
+# Capability grants (principle of least privilege)
+[capabilities]
+tools = ["file_read", "file_write", "file_list", "shell_exec",
+         "memory_store", "memory_recall", "web_fetch",
+         "agent_send", "agent_list", "agent_spawn", "agent_kill"]
+network = ["*"]                     # Network access patterns
+memory_read = ["*"]                 # Memory namespaces agent can read
+memory_write = ["self.*"]           # Memory namespaces agent can write
+agent_spawn = true                  # Can this agent spawn other agents?
+agent_message = ["*"]               # Which agents can it message?
+shell = ["python *", "cargo *"]     # Allowed shell command patterns (whitelist)
+
+# Named shared workspaces (optional).
+# Multiple agents can declare the same path — they share the directory
+# without identity-file collisions. Paths are relative to workspaces_dir.
+# [workspaces]
+# library = { path = "shared/library", mode = "rw" }
+# archive = { path = "shared/archive", mode = "r"  }
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `file_read` | Read file contents |
+| `file_write` | Write/create files |
+| `file_list` | List directory contents |
+| `shell_exec` | Execute shell commands (restricted by `shell` whitelist) |
+| `memory_store` | Persist key-value data to memory |
+| `memory_recall` | Retrieve data from memory |
+| `web_fetch` | Fetch content from URLs (SSRF-protected) |
+| `agent_send` | Send a message to another agent |
+| `agent_list` | List all running agents |
+| `agent_spawn` | Spawn a new agent |
+| `agent_kill` | Terminate a running agent |
+
+### Tips for Custom Agents
+
+1. **Start minimal**. Grant only the tools and capabilities the agent actually needs. You can always add more later.
+2. **Write a clear system prompt**. The system prompt is the most important part of the template. Be specific about the agent's role, methodology, output format, and limitations.
+3. **Set appropriate temperature**. Use 0.2 for precise/analytical tasks, 0.5 for balanced tasks, 0.7+ for creative tasks.
+4. **Use shell whitelists**. Never grant `shell = ["*"]`. Whitelist specific command patterns like `shell = ["python *", "cargo test *"]`.
+5. **Set token budgets**. Use `max_llm_tokens_per_hour` to prevent runaway costs. Start with 100,000 and adjust based on usage.
+6. **Use memory for continuity**. Grant `memory_store` and `memory_recall` so the agent can persist context across sessions.
+
+---
+
+## Agent Workspace
+
+Every agent gets a private home directory under `~/.librefang/workspaces/agents/<name>/`. The kernel writes identity files here on first spawn:
+
+```
+workspaces/agents/librarian/
+├── .identity/          ← identity files (managed by kernel)
+│   ├── SOUL.md         ← personality & mission
+│   ├── IDENTITY.md     ← visual identity (emoji, color, vibe)
+│   ├── USER.md         ← learned user preferences
+│   ├── TOOLS.md        ← tool & environment notes
+│   ├── MEMORY.md       ← long-term memory
+│   ├── AGENTS.md       ← behavioral guidelines
+│   └── BOOTSTRAP.md    ← first-run protocol
+├── sessions/           ← conversation history
+├── memory/             ← daily memory logs
+├── data/               ← agent-specific data
+├── output/             ← generated output files
+├── skills/             ← agent-specific skills
+└── logs/               ← agent logs
+```
+
+You can freely edit any file in `.identity/` — the kernel uses `create_new` and will never overwrite your edits.
+
+### Shared Workspaces
+
+Use `[workspaces]` to give multiple agents access to a shared directory without any collision. Each agent keeps its own private home; only the declared shared paths are shared.
+
+```toml
+# librarian/agent.toml
+[workspaces]
+library = { path = "shared/library", mode = "rw" }
+
+# researcher/agent.toml
+[workspaces]
+library = { path = "shared/library", mode = "r" }   # read-only
+```
+
+The kernel creates the directories on spawn and injects their resolved paths into `TOOLS.md`:
+
+```
+## Shared Workspaces
+- @library → /home/you/.librefang/workspaces/shared/library (read-write)
+```
+
+**Modes**: `rw` (read-write, default) or `r` (read-only). Paths are relative to `workspaces_dir` and must not be absolute or contain `..`.
+
+#### External mounts (`mount`)
+
+Use `mount` instead of `path` to expose a directory that already exists outside `workspaces_dir` — for example an Obsidian vault or a project tree:
+
+```toml
+# agent.toml
+[workspaces]
+vault = { mount = "/Users/me/Documents/Obsidian", mode = "r" }
+```
+
+Constraints:
+
+- `mount` must be an absolute path that already exists. The kernel never creates host directories on the agent's behalf.
+- The path must canonicalize to a prefix of one of the entries in `config.toml`'s top-level `allowed_mount_roots`. Without that whitelist, every `mount` is rejected at boot — the safe default.
+- `path` and `mount` are mutually exclusive within a single declaration.
+
+```toml
+# config.toml — required to enable the example above
+allowed_mount_roots = [
+  "/Users/me/Documents",
+]
+```
+
+`readonly` mode (`mode = "r"`) is enforced for mounts the same way as for shared workspaces: write tool calls are rejected by the kernel.
+
+### Live Context (`context.md`)
+
+If a `context.md` file is present in the agent's workspace, it is re-read **on every agent turn** and injected into the system prompt as a `## Live Context` section. This lets external tools (cron jobs, scripts, dashboards) push fresh data — market prices, project state, on-call rosters — into an agent without restarting it.
+
+**Path resolution**: `{workspace}/.identity/context.md` is preferred; `{workspace}/context.md` is used as a fallback for unmigrated workspaces.
+
+**Behavior**:
+- The file is read once per turn, right before the prompt is assembled.
+- Reads are capped at 32 KB; oversized files are truncated with a warning.
+- When a previously-successful read fails (e.g. the file is briefly replaced by an external writer), the most recent cached content is reused so the agent does not lose context mid-conversation.
+- If the file does not exist, no `## Live Context` section is added.
+
+**Opting out**: set `cache_context = true` in `agent.toml` to restore the pre-Apr-2026 behavior, where `context.md` is read once at session start and cached for the lifetime of the session.
+
+```toml
+# agent.toml
+cache_context = true   # default: false (re-read every turn)
+```
+
+### Lazy Tool Loading (`tool_search` / `tool_load`)
+
+A default agent answering "hi" used to ship the JSON schema of every built-in tool in every request — ~75 tools × ~90 tokens each ≈ 6 000 tokens of dead weight per turn. Lazy tool loading shrinks that to the ~19 tools the model actually needs in most turns and exposes the long tail through two meta-tools the LLM calls on demand:
+
+- **`tool_search(query)`** — keyword-match against the catalog (name + description + hint). Returns matching tools with their one-line hints.
+- **`tool_load(name)`** — fetch one tool's full schema. The tool becomes callable on the next turn (the schema is added to the request from then on).
+
+The full catalog is still rendered as a one-line-per-tool hint list in the system prompt, so the model knows what exists without paying for full schemas. **Tools the runtime classifies as "always native"** (file_read, shell_exec, the cron tools, …) keep their full schema in every request — there's no point making the model `tool_load` something it almost certainly will use.
+
+Opt out per agent if a model is bad at `tool_search` chains:
+
+```toml
+# agent.toml — disable lazy loading; ship every tool schema every turn
+lazy_tools = false
+```
+
+---
+
+## Spawning Agents
+
+### CLI
+
+```bash
+# Spawn by template name
+librefang spawn coder
+
+# Spawn with a custom name
+librefang spawn coder --name "backend-coder"
+
+# Spawn from a TOML file path
+librefang spawn --template agents/custom/my-agent.toml
+
+# List running agents
+librefang agents
+
+# Send a message
+librefang message <agent-id> "Write a function to parse TOML files"
+
+# Kill an agent
+librefang kill <agent-id>
+```
+
+### REST API
+
+```bash
+# Spawn from template
+POST /api/agents
+{"template": "coder"}
+
+# Spawn with overrides
+POST /api/agents
+{"template": "coder", "name": "backend-coder", "model": "deepseek-chat"}
+
+# Send message
+POST /api/agents/{id}/message
+{"content": "Implement the auth module"}
+
+# WebSocket (streaming)
+WS /api/agents/{id}/ws
+
+# List agents
+GET /api/agents
+
+# Delete agent
+DELETE /api/agents/{id}
+```
+
+### OpenAI-Compatible API
+
+```bash
+# Use any agent through the OpenAI-compatible endpoint
+POST /v1/chat/completions
+{
+  "model": "librefang:coder",
+  "messages": [{"role": "user", "content": "Write a Rust HTTP server"}],
+  "stream": true
+}
+
+# List available models
+GET /v1/models
+```
+
+### Orchestrator Delegation
+
+The orchestrator agent can spawn and delegate to any other agent programmatically:
+
+```
+User: "Build a REST API with tests and documentation"
+
+Orchestrator:
+1. agent_send(coder, "Implement the REST API endpoints")
+2. agent_send(test-engineer, "Write integration tests for these endpoints")
+3. agent_send(doc-writer, "Document the API endpoints")
+4. Synthesize all results into a final report
+```
+
+---
+
+## Environment Variables
+
+All agent templates use `provider = "default"` and `model = "default"`. The model that agents actually use depends on which provider and model you configure in `~/.librefang/config.toml`.
+
+Set one or more of the following API keys depending on which provider you want to use:
+
+| Variable | Provider |
+|----------|----------|
+| `GROQ_API_KEY` | Groq |
+| `GEMINI_API_KEY` | Google Gemini |
+| `OPENAI_API_KEY` | OpenAI |
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `DEEPSEEK_API_KEY` | DeepSeek |
+
+Configure your default provider and model in `~/.librefang/config.toml`:
+
+```toml
+[model]
+provider = "groq"                    # or "gemini", "openai", "anthropic", "deepseek"
+model = "llama-3.3-70b-versatile"    # the model identifier for your chosen provider
+api_key_env = "GROQ_API_KEY"         # env var holding the API key
+```
+
+Any agent spawned without an explicit model override will use this default configuration.
+
+---
+
+## Agent Manifest Field Reference
+
+`agent.toml` accepts a number of top-level fields that aren't shown in the standard quick-start templates. Listing the full set so you can find the field name when you need it. All fields are optional unless marked otherwise.
+
+### Tool / skill scoping
+
+```toml
+tool_allowlist = ["web_search", "web_fetch", "file_read", "file_write"]
+tool_blocklist = ["shell_exec"]
+tools_disabled = false             # explicit master kill-switch — overrides everything else
+allowed_plugins = ["truncate", "redact"]   # plugin names; empty = all available plugins
+mcp_servers    = ["github", "linear"]     # MCP server names; empty = no servers, ["*"] = all connected
+skills_disabled = false            # explicit master kill-switch for skills
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `tool_allowlist` | `Vec<string>` | `[]` (= all tools) | Whitelist of tool names this agent may call. Empty list = unrestricted. |
+| `tool_blocklist` | `Vec<string>` | `[]` | Tools this agent **may not** call. Applied **after** `tool_allowlist` so a name on both lists is denied. |
+| `tools_disabled` | bool | `false` | Master kill-switch — when `true`, the agent has zero tools regardless of allowlist / profile. |
+| `allowed_plugins` | `Vec<string>` | `[]` (= all plugins) | Plugin allowlist for this agent. |
+| `mcp_servers` | `Vec<string>` | `[]` (= **no** servers) | MCP server allowlist. `[]` exposes zero MCP tools; `["*"]` exposes all connected servers; a named list scopes to those servers. Useful when one corp server has dangerous tools and you only want a few agents talking to it. |
+| `skills_disabled` | bool | `false` | Master kill-switch for skills. |
+
+### Identity & spawn behaviour
+
+```toml
+generate_identity_files = true     # create SOUL.md / IDENTITY.md / TOOLS.md on first spawn
+inherit_parent_context  = true     # subagents inherit parent context by default
+auto_evolve             = true     # background skill-evolution review after each turn
+is_hand                 = false    # auto-set when spawned by a Hand
+pinned_model            = "anthropic/claude-sonnet-4"   # locks model in Stable kernel mode
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `generate_identity_files` | bool | `true` | Create `SOUL.md` / `IDENTITY.md` / `TOOLS.md` / `USER.md` in `.identity/` on first spawn. Set `false` for ephemeral agents that don't need an evolving identity. |
+| `inherit_parent_context` | bool | `true` | When this agent runs as a subagent of a workflow, inherit the parent's session context. `false` gives a clean context window. |
+| `auto_evolve` | bool | `true` | After each agent turn, run the background skill-evolution review (looks for repeated patterns and proposes new skills). Disable to keep the skill library frozen. |
+| `is_hand` | bool | `false` | Auto-populated when a Hand spawns the agent. Don't set manually. |
+| `pinned_model` | `Option<string>` | `None` | When the kernel is in **Stable** mode, this model is used regardless of the global default. No effect in Normal mode. |
+
+### Channel & exec policy overrides (per-agent)
+
+```toml
+[channel_overrides]
+dm_policy = "always"
+group_policy = "trigger_only"
+group_trigger_patterns = ["(?i)\\bmy-bot\\b"]
+
+[exec_policy]
+shell_allowlist = ["git", "cargo"]
+deny = ["rm -rf"]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `[channel_overrides]` | `Option<ChannelOverrides>` | `None` (inherit channel-level) | Per-agent overrides for `dm_policy` / `group_policy` / `model` / `system_prompt` / etc. Resolution order: agent-level → channel-level → built-in default. See [Channels](/integrations/channels#channel-overrides) for the full schema. |
+| `[exec_policy]` | `Option<ExecPolicy>` | `None` (inherit kernel default) | Per-agent shell / exec policy override. Either a string shorthand (`"strict"` / `"trusted"`) or a full table with `shell_allowlist` / `deny` / `cwd_allowlist`. |
+
+### Response shaping & augmentation
+
+```toml
+show_progress = true
+response_format = "json_object"   # or { type = "json_schema", schema = "..." }
+web_search_augmentation = "auto"  # "off" | "auto" | "always"
+
+[[context_injection]]
+name = "rules"
+content = "Be concise. Never use emoji."
+position = "system"
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `show_progress` | bool | `true` | Surface tool execution progress in channel replies (e.g. "🔧 running shell_exec…"). Disable for production / customer-facing agents. |
+| `response_format` | `Option<ResponseFormat>` | `None` | Constrain LLM output. Options: `"text"`, `"json_object"`, or `{ type = "json_schema", schema = … }`. Provider must support structured output (OpenAI / Gemini / Mistral). |
+| `web_search_augmentation` | enum | provider default | When the model has no built-in tool support, auto-inject web search results into the prompt. `"off"` / `"auto"` / `"always"`. |
+| `[[context_injection]]` | `Vec<ContextInjection>` | `[]` | Static prompt fragments merged into every session start. Each entry has `name`, `content`, `position` (`system` / `before_user` / `after_reset`), optional `condition` expression. |

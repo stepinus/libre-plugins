@@ -1,0 +1,628 @@
+# Development Guide
+
+LibreFang development environment setup and contribution guidelines.
+
+---
+
+## Development Environment
+
+### Prerequisites
+
+- **Rust** 1.85+
+- **Node.js** 22+ (for dashboard and desktop app)
+- **pnpm** 10+ (for dashboard, docs, and web site)
+- **just** (command runner, [install guide](https://github.com/casey/just#installation))
+
+Install just:
+
+```bash
+# macOS
+brew install just
+
+# Windows
+winget install Casey.Just        # or: scoop install just
+
+# Linux (Debian/Ubuntu)
+sudo apt install just            # Ubuntu 24.04+, otherwise use cargo
+
+# Any platform with Rust installed
+cargo install just
+```
+
+### Clone Repository
+
+```bash
+git clone https://github.com/librefang/librefang.git
+cd librefang
+```
+
+### Build with just (Recommended)
+
+The project uses [just](https://github.com/casey/just) as a command runner.
+Run `just` to list all available recipes.
+
+```bash
+# Build + install CLI with dashboard (recommended for first-time setup)
+just install
+
+# Build workspace libraries only
+just build
+
+# Run all tests
+just test
+
+# Lint (must have zero clippy warnings)
+just lint
+
+# Local CI simulation: build + test + clippy + web lint
+just ci
+```
+
+`just install` automatically builds the React dashboard before compiling the CLI binary,
+so the dashboard will be fully functional on `http://127.0.0.1:4545/`.
+
+<Note>
+The justfile uses `[unix]` and `[windows]` recipe attributes for cross-platform support. All recipes work on macOS, Linux, and Windows. On Windows, `just install` uses PowerShell commands automatically.
+</Note>
+
+### Build without just
+
+```bash
+# Build entire workspace (dashboard assets are pre-committed, no extra step needed)
+cargo build --workspace
+
+# Build CLI only
+cargo build -p librefang-cli
+
+# Build desktop app
+cargo build -p librefang-desktop
+```
+
+### First Run
+
+```bash
+# Initialize config (~/.librefang/config.toml)
+librefang init
+
+# Start the daemon
+librefang start
+
+# Open dashboard: http://127.0.0.1:4545/
+```
+
+### Dashboard Development
+
+The React dashboard is built locally into `crates/librefang-api/static/react/` (gitignored).
+CI builds and uploads it automatically; for local development, rebuild before compiling the Rust binary:
+
+```bash
+# Rebuild dashboard assets
+just dashboard-build
+
+# Or manually:
+cd crates/librefang-api/dashboard
+pnpm install --frozen-lockfile
+pnpm run build
+cd ../../..
+cargo build -p librefang-cli
+```
+
+For active development with hot reload:
+
+```bash
+# Option A: start daemon + dashboard dev server together
+just dev
+
+# Option B: manually
+librefang start                          # Terminal 1: backend daemon
+cd crates/librefang-api/dashboard        # Terminal 2: Vite dev server
+pnpm install && pnpm dev
+# Open http://localhost:5173/dashboard/  # Auto-proxies /api to 127.0.0.1:4545
+```
+
+### Test
+
+```bash
+# Run all tests
+cargo test --workspace
+
+# Run specific crate
+cargo test -p librefang-kernel
+
+# Run doc tests
+cargo test --doc
+```
+
+### Linting
+
+```bash
+# Must have zero warnings
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Format check
+cargo fmt --all -- --check
+```
+
+---
+
+## Project Structure
+
+```
+librefang/
+├── Cargo.lock
+├── Cargo.toml
+├── crates/
+│   ├── librefang-cli/          # CLI tool
+│   ├── librefang-api/         # REST API server
+│   ├── librefang-kernel/      # Core kernel
+│   ├── librefang-runtime/     # Agent runtime
+│   ├── librefang-memory/      # Memory subsystem
+│   ├── librefang-types/       # Shared types
+│   ├── librefang-channels/    # Channel adapters
+│   ├── librefang-skills/      # Skill system
+│   ├── librefang-hands/       # Hands system
+│   ├── librefang-wire/        # P2P protocol
+│   ├── librefang-desktop/     # Desktop app
+│   ├── librefang-import/      # Framework-import tool (OpenClaw/OpenFang/LangChain/AutoGPT)
+│   └── librefang-extensions/   # Extensions
+├── xtask/                      # Build scripts
+├── docs/                       # Project documentation
+└── scripts/                    # Helper scripts
+```
+
+---
+
+## Adding New Channel
+
+### 1. Create Channel Module
+
+```rust
+// crates/librefang-channels/src/my_channel.rs
+
+use async_trait::async_trait;
+use std::pin::Pin;
+use futures::Stream;
+use crate::types::{ChannelAdapter, ChannelContent, ChannelMessage, ChannelStatus, ChannelType, ChannelUser};
+
+pub struct MyChannel {
+    // channel-specific fields (e.g. API client, config)
+}
+
+#[async_trait]
+impl ChannelAdapter for MyChannel {
+    fn name(&self) -> &str {
+        "my_channel"
+    }
+
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::Custom("my_channel".to_string())
+    }
+
+    async fn start(
+        &self,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = ChannelMessage> + Send>>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        // Return a stream of incoming messages
+        todo!()
+    }
+
+    async fn send(
+        &self,
+        _user: &ChannelUser,
+        _content: ChannelContent,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Send response back to the user
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+}
+```
+
+### 2. Register Channel
+
+Channel adapters are registered with `BridgeManager` in `librefang-api/src/server.rs`
+by calling `bridge_manager.add_adapter(Arc::new(MyChannel::new(config)))`.
+Each adapter is gated behind a Cargo feature flag (`channel-my-channel`) in
+`crates/librefang-channels/Cargo.toml`.
+
+```rust
+// crates/librefang-channels/src/lib.rs — add the feature-gated module
+#[cfg(feature = "channel-my-channel")]
+pub mod my_channel;
+```
+
+### 3. Add Configuration
+
+```rust
+// crates/librefang-types/src/config.rs
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MyChannelConfig {
+    pub api_key_env: String,
+    pub allowed_users: Option<Vec<String>>,
+}
+```
+
+---
+
+## Adding New Skill
+
+### 1. Create Skill Structure
+
+```toml
+# skills/my-skill/skill.toml
+name = "my-skill"
+version = "1.0.0"
+description = "My custom skill"
+
+[runtime]
+type = "python"
+entrypoint = "main.py"
+
+[tools]
+provided = ["my_tool"]
+
+[requirements]
+packages = ["requests"]
+```
+
+### 2. Implement Code
+
+```python
+# skills/my-skill/main.py
+
+def my_tool(param: str) -> str:
+    """My custom tool description"""
+    # Implement logic
+    return f"Result: {param}"
+
+# Register tools
+TOOLS = [my_tool]
+```
+
+### 3. Compile Skill
+
+```bash
+# Skills are automatically compiled into binary
+cargo build --workspace
+```
+
+---
+
+## Adding New Tool
+
+### 1. Define Tool
+
+```rust
+// crates/librefang-runtime/src/tools/mod.rs
+
+use crate::tool::{Tool, ToolResult};
+
+pub struct MyTool;
+
+impl Tool for MyTool {
+    fn name(&self) -> &str {
+        "my_tool"
+    }
+
+    fn description(&self) -> &str {
+        "My custom tool description"
+    }
+
+    async fn execute(&self, params: Value) -> ToolResult {
+        // Implement tool logic
+        Ok(Value::String("result".to_string()))
+    }
+}
+```
+
+### 2. Register Tool
+
+```rust
+// crates/librefang-runtime/src/lib.rs
+
+pub fn register_tools(registry: &mut ToolRegistry) {
+    registry.register(MyTool::new());
+}
+```
+
+---
+
+## Adding New LLM Provider
+
+### 1. Implement Driver
+
+```rust
+// crates/librefang-runtime/src/llm/my_provider.rs
+
+use crate::llm::{LlmDriver, LlmResponse, LlmError};
+
+pub struct MyProvider {
+    api_key: String,
+    base_url: String,
+}
+
+#[async_trait]
+impl LlmDriver for MyProvider {
+    async fn complete(&self, prompt: &str) -> Result<LlmResponse, LlmError> {
+        // Call API
+        Ok(LlmResponse {
+            text: "response".to_string(),
+            tokens: 100,
+        })
+    }
+}
+```
+
+### 2. Add to Model Catalog
+
+```rust
+// crates/librefang-types/src/models.rs
+
+pub fn get_provider(name: &str) -> Option<Box<dyn LlmDriver>> {
+    match name {
+        "my_provider" => Some(Box::new(MyProvider::new())),
+        _ => None,
+    }
+}
+```
+
+---
+
+## Code Style
+
+### Rust Standards
+
+- Format with `cargo fmt`
+- Check with `cargo clippy`
+- Follow Rust naming conventions
+- Add documentation comments (`///`)
+
+### Commit Standards
+
+```bash
+# Format: <type>(<scope>): <description>
+
+git commit -m "feat(kernel): add new scheduling algorithm"
+git commit -m "fix(channels): resolve Slack rate limit"
+git commit -m "docs(api): update endpoint documentation"
+git commit -m "test(runtime): add tool execution tests"
+```
+
+### Types
+
+| Type | Description |
+|------|-------------|
+| feat | New feature |
+| fix | Bug fix |
+| docs | Documentation |
+| style | Formatting |
+| refactor | Refactoring |
+| test | Testing |
+| chore | Maintenance |
+
+---
+
+## Testing
+
+### Unit Tests
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_my_function() {
+        assert_eq!(my_function(2), 4);
+    }
+}
+```
+
+### Integration Tests
+
+```rust
+#[tokio::test]
+async fn test_agent_spawn() {
+    let kernel = Kernel::new().await;
+    let agent = kernel.spawn("test-agent").await;
+    assert!(agent.is_running());
+}
+```
+
+### Benchmark Tests
+
+```rust
+#[tokio::bench]
+async fn benchmark_llm_call(b: &mut Bencher) {
+    b.iter(|| {
+        runtime.block_on(llm.complete("test prompt"))
+    })
+}
+```
+
+---
+
+## Debugging
+
+### Logging
+
+```rust
+use tracing::{info, warn, error};
+
+info!("Starting agent {}", agent_id);
+warn!("Rate limit exceeded for channel {}", channel_id);
+error!("Failed to connect to provider: {}", error);
+```
+
+### Debug Mode
+
+```bash
+# Enable verbose logging
+RUST_LOG=debug cargo run
+
+# See specific module only
+RUST_LOG=librefang_kernel=trace cargo run
+```
+
+### Dashboard Debugging
+
+The dashboard is a React SPA embedded into the binary at compile time via `include_dir!`.
+Asset files are served at `/dashboard/*`.
+
+**Blank page / assets 404:**
+
+```bash
+# 1. Check that the daemon is running and healthy
+curl -s http://127.0.0.1:4545/api/health
+
+# 2. Verify the HTML is served (should return <!doctype html>...)
+curl -s http://127.0.0.1:4545/ | head -5
+
+# 3. Test a specific asset path (pick from the <script> tag in the HTML)
+curl -sI http://127.0.0.1:4545/dashboard/assets/index-DVRukrPy.js
+# 200 = OK, 404 = assets not embedded
+
+# 4. If assets 404, rebuild the dashboard locally and recompile
+just dashboard-build
+cargo build -p librefang-cli --release
+```
+
+**Dashboard shows but data is empty:**
+
+```bash
+# Check API endpoints directly
+curl -s http://127.0.0.1:4545/api/status | python3 -m json.tool
+curl -s http://127.0.0.1:4545/api/agents | python3 -m json.tool
+
+# Check browser console for CORS or auth errors (F12 → Console)
+# Default install has no auth — if api_key is set, pass it:
+curl -s -H "Authorization: Bearer YOUR_KEY" http://127.0.0.1:4545/api/status
+```
+
+**Dashboard dev server can't reach API:**
+
+```bash
+# Vite proxies /api to http://127.0.0.1:4545 — make sure daemon is running
+librefang status
+# If not running:
+librefang start
+```
+
+### Performance Profiling
+
+```bash
+# CPU profiling
+cargo flamegraph --bin librefang-cli -- start
+```
+
+---
+
+## Release
+
+### Versioning
+
+LibreFang uses [Calendar Versioning](https://calver.org/) — `YYYY.M.DDHH`.
+
+| Type | Format | Example | Description |
+|------|--------|---------|-------------|
+| Stable | `YYYY.M.DDHH` | `2026.3.2314` | Day + hour of release |
+| Beta | `YYYY.M.DDHH-betaN` | `2026.3.2314-beta1` | Pre-release for testing |
+| RC | `YYYY.M.DDHH-rcN` | `2026.3.2314-rc1` | Release candidate |
+| LTS | `YYYY.M.PATCH-lts` | `2026.3.0-lts` | Long-term support |
+
+### Release Process
+
+All releases are done via `cargo xtask release`:
+
+```bash
+cargo xtask release
+#   1) stable  -> 2026.3.2314
+#   2) beta    -> 2026.3.2314-beta1
+#   3) rc      -> 2026.3.2314-rc1
+#   4) lts     -> 2026.3.0-lts
+```
+
+This command automatically:
+- Generates CHANGELOG from git history
+- Syncs version across Cargo.toml, package.json, setup.py
+- Builds React dashboard
+- Creates git tag and push
+- Opens a PR for the version bump
+
+Use `--dry-run` to preview without making changes:
+```bash
+cargo xtask release --dry-run --version "2026.3.0-lts"
+```
+
+### LTS Releases
+
+LTS (Long-Term Support) versions receive only security and bug fixes. No new features.
+
+**Version scheme:**
+```
+v2026.3.0-lts     ← initial LTS
+v2026.3.1-lts     ← patch 1 (bug fix)
+v2026.3.2-lts     ← patch 2 (security fix)
+```
+
+**Creating an LTS release:**
+```bash
+# On main branch — choose option 4
+cargo xtask release
+```
+
+CI automatically:
+- Creates a `release/2026.3` branch from the tag
+- Sets branch protection (requires PR review)
+- Tags Docker image with `:lts`
+- Marks the GitHub Release as LTS
+
+**Patching an LTS release:**
+```bash
+# Switch to the LTS branch
+git checkout release/2026.3
+
+# Cherry-pick the fix from main
+git cherry-pick <commit-sha>
+
+# Release the patch (auto-increments patch number)
+cargo xtask release --lts-patch
+```
+
+**Rules:**
+- Only cherry-pick fixes, never new features
+- Every patch must go through PR review on the `release/` branch
+- LTS branches are maintained until the next LTS is declared
+- Docker `:lts` tag always points to the latest LTS release
+
+---
+
+## Contributing
+
+### Contribution Process
+
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/my-feature`)
+3. Commit changes (`git commit -m "feat: add my feature"`)
+4. Push branch (`git push origin feature/my-feature`)
+5. Create Pull Request
+
+### Code Review
+
+- Ensure `cargo clippy` has no warnings
+- Ensure `cargo test` passes
+- Add test coverage for new code
+- Update documentation
+
+### Code of Conduct
+
+- Respect others
+- Welcome newcomers
+- Communicate professionally
+- Accept constructive criticism

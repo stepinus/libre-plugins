@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lcm": {
+      "type": "stdio",
+      "command": "lcm",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

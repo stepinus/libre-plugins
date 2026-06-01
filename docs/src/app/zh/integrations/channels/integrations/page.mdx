@@ -1,0 +1,333 @@
+# 集成与协议渠道
+
+## LINE
+
+LINE 现以 `librefang.sidecar.adapters.line` Python sidecar 形式发布（进程内 Rust 适配器已在 sidecar 迁移中移除）。sidecar **自身运行 HTTP Webhook 服务器**，因此你在 LINE Developers Console 注册的 URL 需要指向 sidecar 的主机/端口，而非 LibreFang API 端口。
+
+### 前置条件
+
+- LINE Messaging API 频道（从 [LINE Developers Console](https://developers.line.biz/en/docs/messaging-api/) 创建）
+- 运行 sidecar 的机器上已安装 `librefang` Python SDK
+- 指向 sidecar 的公网可达 Webhook URL（通常做法：在 sidecar 的 `LINE_WEBHOOK_PORT` 前部署 HTTPS 反向代理）
+
+### 设置步骤
+
+1. 前往 [LINE Developers Console](https://developers.line.biz/console/)，创建新的 Messaging API 频道。
+2. 记录 **Channel Secret** 并签发 **Channel Access Token**。
+3. 将两个凭据写入 `~/.librefang/secrets.env`（也可通过仪表板的 "Set API Key" 按钮设置，会写入同一文件）：
+
+```bash
+LINE_CHANNEL_SECRET=your-secret
+LINE_CHANNEL_ACCESS_TOKEN=your-access-token
+```
+
+4. 在 `config.toml` 中声明 sidecar：
+
+```toml
+[[sidecar_channels]]
+name = "line"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.line"]
+channel_type = "line"
+default_agent = "assistant"
+[sidecar_channels.env]
+LINE_WEBHOOK_PORT = "9090"
+# LINE_WEBHOOK_PATH = "/webhook"
+# LINE_ACCOUNT_ID = "production"   # 可选，多账号路由 Key
+```
+
+5. 在 LINE Developers Console 中将 Webhook URL 设为 sidecar 主机地址（例如 `https://your-sidecar-host:9090/webhook`）。
+6. 重启守护进程 —— supervisor 会拉起 sidecar，sidecar 通过 `GET /v2/bot/info` 在启动时校验 access token，然后开始接收 Webhook POST。
+
+### 工作原理
+
+sidecar 作为 LibreFang 的被监管子进程运行。它在 `LINE_WEBHOOK_PORT`（默认 `9090`）+ `LINE_WEBHOOK_PATH`（默认 `/webhook`）上提供独立的 HTTP Webhook，对每个入站 POST 验证 `X-Line-Signature` 与原始请求字节的 HMAC-SHA256（缺失 → 400，不匹配 → 401），并通过 stdio 上的换行分隔 JSON-RPC 将解析后的 `message` 事件转发给内核。出站经由 `POST /v2/bot/message/push` 以 Bearer access token 发送；429 响应会遵守 `Retry-After`，分块级别的 fail-open 确保单个被限流的分块不会导致剩余多段回复全部丢失。
+
+---
+
+## 钉钉
+
+钉钉由 Python sidecar 适配器（`librefang.sidecar.adapters.dingtalk`）提供，**仅 stream 模式**。in-process `[channels.dingtalk]` 配置块已在 sidecar 迁移中移除；请改为通过 `[[sidecar_channels]]` 条目声明。原 in-process `webhook` 模式（基于 `timestamp + secret + body` 的 HMAC-SHA256）已**未**迁移 —— 请在钉钉管理后台将机器人切换到 stream 订阅。
+
+### 前置条件
+
+- 在[钉钉开放平台](https://open.dingtalk.com/document/)创建的应用
+- 应用的 App Key 和 App Secret
+- 守护进程主机上有 `python3`（无第三方包要求 —— stdlib-only sidecar）
+
+### 设置步骤
+
+1. 前往[钉钉开放平台](https://open.dingtalk.com/)，创建应用（或使用现有应用）。
+2. 启用 **机器人** 能力，记录 **App Key**（Client ID）和 **App Secret**（Client Secret）。
+3. 添加到 `config.toml`：
+
+```toml
+[[sidecar_channels]]
+name = "dingtalk"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.dingtalk"]
+channel_type = "dingtalk"
+[sidecar_channels.env]
+DINGTALK_APP_KEY = "dingxxx..."
+# DINGTALK_ACCOUNT_ID = "prod-bot"     # 可选，多机器人路由键
+# DINGTALK_ALLOWED_USERS = "staff1,staff2"   # 可选，staffId 白名单
+```
+
+4. 把 `DINGTALK_APP_SECRET` 放入 `~/.librefang/secrets.env`（仪表板的"通道"页面会替你写入）。
+5. 重启守护进程。
+
+### 工作原理
+
+sidecar 通过 `POST /v1.0/gateway/connections/open` 向钉钉网关注册以获取 WebSocket 端点和票据，建立 WS 连接后对每一帧 CALLBACK 立即 ACK，并向钉钉随每条入站事件返回的 per-message `sessionWebhook` URL POST 回复。SYSTEM ping/pong 心跳自动处理。重连为 3 → 60 秒指数退避。
+
+---
+
+## QQ（Sidecar）
+
+QQ 已从进程内 Rust 适配器迁移到进程外 Python sidecar（`librefang.sidecar.adapters.qq`）。
+
+### 前置条件
+
+- 在 [QQ 机器人平台](https://bot.q.qq.com/wiki/) 注册的 QQ Bot，并拿到 App ID 与 App Secret。
+- Python 3 + `librefang` SDK（`pip install -e sdk/python`）。
+
+### 设置步骤
+
+1. 在 QQ 开放平台注册 Bot，记录 `App ID` 和 `App Secret`。
+2. 把密钥写入 `~/.librefang/secrets.env`：
+
+```bash
+QQ_APP_SECRET=your-app-secret
+```
+
+3. 在 `~/.librefang/config.toml` 中声明 sidecar：
+
+```toml
+[[sidecar_channels]]
+name = "qq"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.qq"]
+channel_type = "qq"
+default_agent = "assistant"
+[sidecar_channels.env]
+QQ_APP_ID = "your-app-id"
+# QQ_ALLOWED_USERS = "openid-1,openid-2"   # 可选
+# QQ_ACCOUNT_ID = "prod-bot"               # 可选
+# QQ_INTENTS = "1073746435"                # 可选，覆盖 intents bitmask
+```
+
+4. 重启守护进程。
+
+### 工作原理
+
+Sidecar 先调 `https://bots.qq.com/app/getAppAccessToken` 拿 access token，再通过 `GET /gateway` 发现 WebSocket 网关，然后用 HELLO → IDENTIFY → READY 流程建立持久 WS 连接并周期发心跳。入站 `MESSAGE_CREATE` / `AT_MESSAGE_CREATE` / `DIRECT_MESSAGE_CREATE` / `GROUP_AT_MESSAGE_CREATE` / `C2C_MESSAGE_CREATE` 事件转发给内核；出站回复走 `POST {api_base}{reply_endpoint}`，把入站 `msg_id` 作为被动回复目标。
+
+---
+
+## 企业微信（sidecar）
+
+企业微信（WeCom / WeChat Work）已从 in-process Rust 适配器迁移到 out-of-process Python sidecar（`librefang.sidecar.adapters.wecom`）。原 callback 模式（HTTP webhook + AES-CBC-256 入站解密）不再支持 —— Python 标准库没有 AES，sidecar SDK 按惯例只用 stdlib。原先使用 callback 模式的运维人员需要在企业微信管理后台将机器人切换到 WebSocket 模式。
+
+### 前置条件
+
+- 具有**智能机器人**的企业微信账户（从[企业微信管理后台](https://work.weixin.qq.com/)创建）
+- 运行 sidecar 的 Python 环境已安装 `librefang-sdk`（仓库根目录执行 `pip install -e sdk/python`，或包发布后 `pip install librefang-sdk`）
+
+### 设置步骤
+
+1. 在企业微信管理后台，前往 **应用管理 > 创建应用**，选择**智能机器人**。记录 **Bot ID** 和 **Secret**。
+2. 把密钥放在 `~/.librefang/secrets.env`：
+
+```bash
+WECOM_BOT_SECRET=your-bot-secret
+```
+
+3. 在 `config.toml` 里添加 sidecar：
+
+```toml
+[[sidecar_channels]]
+name = "wecom"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.wecom"]
+channel_type = "wecom"
+
+[sidecar_channels.env]
+WECOM_BOT_ID = "aibxxxxxxx"
+# WECOM_ALLOWED_USERS = "alice,bob"   # 可选 CSV；为空 = 允许全部
+# WECOM_ACCOUNT_ID    = "prod-bot"    # 可选，多 Bot 路由
+```
+
+4. 重启守护进程。
+
+### 工作原理
+
+Sidecar 通过持久 WebSocket 连接 `wss://openws.work.weixin.qq.com`，用 `cmd: "aibot_subscribe"` 携带 Bot ID 与 Secret 订阅，并每 30 秒发一次 `cmd: "ping"` 心跳。入站消息以 `cmd: "aibot_msg_callback"` JSON 帧到达；回复使用 `cmd: "aibot_respond_msg"`（针对缓存的入站 `req_id` 的一次性被动回复）或 `cmd: "aibot_send_msg"`（主动推送）。出站 body 一律 `msgtype: "markdown"`，因为智能机器人的 `aibot_respond_msg` 不接受 `msgtype: "text"`。入站 `req_id` 通过容量 10000、淘汰 5000 的有界集合去重，确保 WS 重连撞上平台重投时不会重复 emit。
+
+---
+
+## Ntfy
+
+### 前置条件
+
+- 可访问的 [ntfy](https://docs.ntfy.sh) 服务器（自托管或公共实例 `ntfy.sh`）
+
+### 设置步骤
+
+1. 在 ntfy 服务器上选择一个主题名称。
+2. 设置环境变量：
+
+```bash
+export NTFY_URL=https://ntfy.sh               # 环境变量
+export NTFY_TOPIC=my-librefang-topic
+# export NTFY_TOKEN=your-access-token         # 可选
+librefang vault set NTFY_URL                  # 加密金库（推荐）
+librefang vault set NTFY_TOPIC
+# librefang vault set NTFY_TOKEN              # 可选
+librefang config set-key ntfy                 # .env 文件
+# 或通过仪表板 "Set API Key" 按钮设置          # secrets.env
+```
+
+3. 添加到配置文件（ntfy 以独立进程 sidecar 形式运行，模块 `librefang.sidecar.adapters.ntfy`）：
+
+```toml
+[[sidecar_channels]]
+name = "ntfy"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.ntfy"]
+channel_type = "ntfy"
+[sidecar_channels.env]
+NTFY_SERVER_URL = "https://ntfy.sh"
+NTFY_TOPIC = "my-agent-topic"
+# NTFY_ACCOUNT_ID = "assistant"      # 可选，多机器人路由
+```
+
+`NTFY_TOKEN`（认证 token，公开 topic 可选）写入 `~/.librefang/secrets.env`。
+
+4. 热加载（`curl -X POST http://127.0.0.1:4545/api/channels/reload`）或者重启 daemon。
+
+### 工作原理
+
+Sidecar 通过 Server-Sent Events (SSE) 订阅 ntfy 服务器上的 topic 实时收消息。入站消息路由给配置的 Agent，回复通过 ntfy REST API 发布回该 topic。
+
+---
+
+## Gotify
+
+### 前置条件
+
+- Gotify 服务器实例和应用令牌（参见 [Gotify 文档](https://gotify.net/docs/)）
+
+### 设置步骤
+
+1. 在 Gotify Web UI 中，创建新应用并复制令牌。
+Gotify 以 Python sidecar (`librefang.sidecar.adapters.gotify`, 随 `librefang-sdk` 发布) 形式运行。
+
+2. 在仪表盘 Channels 页面选择 Gotify，填入服务器 URL 与两个 token——`GOTIFY_APP_TOKEN`（发送）/`GOTIFY_CLIENT_TOKEN`（订阅）会写到 `~/.librefang/secrets.env`，`GOTIFY_SERVER_URL` 写到 `~/.librefang/config.toml` 的 `[sidecar_channels.env]`。等价的手工配置：
+
+```toml
+[[sidecar_channels]]
+name = "gotify"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.gotify"]
+channel_type = "gotify"
+[sidecar_channels.env]
+GOTIFY_SERVER_URL = "https://gotify.example.com"
+# GOTIFY_ACCOUNT_ID = "prod"    # 可选，多 bot 路由键
+```
+
+3. 守护进程通过热加载自动起停 sidecar，无需手动重启。
+
+### 工作原理
+
+Gotify sidecar 通过 `wss://{server}/stream?token={client_token}` 与 Gotify 服务器建立 WebSocket 实时接收消息，并向 `{server}/message?token={app_token}` 发起 REST POST 来发送回复。WebSocket 客户端使用 stdlib 实现的 RFC 6455 reader（基于 `socket` + `ssl`，无第三方依赖）。
+
+---
+
+## Nextcloud Talk
+
+Nextcloud Talk 现以 Python sidecar 适配器（`librefang.sidecar.adapters.nextcloud`）提供。在迁移过程中，原 in-process `[channels.nextcloud]` 配置块已被移除。请改为通过 `[[sidecar_channels]]` 条目声明 Nextcloud。
+
+### 前置条件
+
+- 安装了 Talk 应用的 Nextcloud 实例（参见 [Nextcloud Talk API 文档](https://nextcloud-talk.readthedocs.io/)）
+- 应用密码或 Bot 用户账户
+- 守护进程主机上安装有 Python 3.8+（sidecar 以 `python3 -m librefang.sidecar.adapters.nextcloud` 运行）
+
+### 设置步骤
+
+1. 在 Nextcloud 中，前往 **Settings > Security > Devices & sessions** 创建应用密码（或创建专用 Bot 用户）。
+2. 将 sidecar 条目添加到 `config.toml`：
+
+```bash
+[[sidecar_channels]]
+name = "nextcloud"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.nextcloud"]
+channel_type = "nextcloud"
+[sidecar_channels.env]
+NEXTCLOUD_SERVER_URL = "https://cloud.example.com"
+# NEXTCLOUD_ROOMS = "abc123,def456"           # 可选；留空 = 所有已加入房间
+# NEXTCLOUD_ACCOUNT_ID = "prod"               # 可选，多 Bot 路由键
+# NEXTCLOUD_POLL_INTERVAL_SECS = "3"          # 可选，默认 3，下限 1
+```
+
+3. 将 `NEXTCLOUD_TOKEN`（应用密码）写入 `~/.librefang/secrets.env`——在仪表板的 Channels 页面填写 Nextcloud 表单时会自动写入。
+4. 重启守护进程。
+
+### 工作原理
+
+sidecar 按配置间隔（默认 3 秒）以 Bearer 鉴权加必需的 `OCS-APIRequest: true` 标头，对每个房间轮询 `GET /ocs/v2.php/apps/spreed/api/v1/chat/<token>?lookIntoFuture=1`。以 `/` 开头的消息体（`/cmd args`）转为 `Command` 事件，其它为纯文本。出站回复通过 `POST /ocs/v2.php/apps/spreed/api/v1/chat/<token>` 使用表单编码 body 发送；当入站消息位于线程内时通过 `replyTo` 参数正确串入线程（相对原 Rust 适配器从未发送 `replyTo` 的改进）。
+
+---
+
+## Webhook（Sidecar）
+
+Webhook 已从进程内 Rust 适配器迁移到 Python sidecar（`librefang.sidecar.adapters.webhook`，仅依赖标准库）。保留全套 HMAC-SHA256 + 时间戳 + SSRF 防护，外加入站 `message_id` 去重和 429 `Retry-After`（Rust 适配器没有的两项改进）。
+
+### 前置条件
+
+- 可选：可接受 HTTP POST 请求的出站目标 URL
+- HMAC-SHA256 共享密钥
+- 守护进程主机上有 `python3`（无须任何 Python 第三方包）
+
+### 设置步骤
+
+1. 选择用于 HMAC-SHA256 签名验证的共享密钥。
+2. 添加到 `config.toml`：
+
+```toml
+[[sidecar_channels]]
+name = "webhook"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webhook"]
+channel_type = "webhook"
+[sidecar_channels.env]
+WEBHOOK_LISTEN_PORT = "8461"
+# WEBHOOK_LISTEN_PATH = "/webhook"
+# WEBHOOK_CALLBACK_URL = "https://your-service.example.com/hook"
+```
+
+3. 把 `WEBHOOK_SECRET` 写入 `~/.librefang/secrets.env`。
+4. 重启守护进程。
+
+### 工作原理
+
+sidecar 在 `WEBHOOK_LISTEN_PORT` 上跑自己的 `BaseHTTPRequestHandler` over `ThreadingTCPServer` 监听。入站 POST 通过 HMAC-SHA256 验签（`X-Webhook-Signature: sha256=<hex>`，针对原始请求体），可选 `X-Webhook-Timestamp`（毫秒级 Unix 时间戳，±5 分钟时钟偏差容差）用于重放保护。出站回复 POST 到 `WEBHOOK_CALLBACK_URL`（若已设置），同样签名。SSRF 防护在启动时**和**每次出站 POST 时都拒绝指向私网 / 回环 / 链路本地 / 多播 / 云元数据的 callback URL。
+
+### `deliver_only` 透传模式
+
+Webhook sidecar 可以跑成零 LLM 透传：入站 payload 完全绕过 agent 循环（无 sanitiser、无限流、无 agent 查找），直接转发到目标通道。
+
+```toml
+[[sidecar_channels]]
+name = "webhook"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webhook"]
+channel_type = "webhook"
+[sidecar_channels.env]
+WEBHOOK_LISTEN_PORT = "8461"
+WEBHOOK_DELIVER_ONLY = "1"
+WEBHOOK_DELIVER = "telegram:123456789"  # WEBHOOK_DELIVER_ONLY=1 时必填
+```
+
+`WEBHOOK_DELIVER_ONLY=1` 时若 `WEBHOOK_DELIVER` 为空，sidecar **启动时 fail-closed** —— 原 Rust validator 在同位置只 warn-and-continue，导致入站运行时被静默丢弃。完整的 `__deliver_only__` / `__deliver_target__` 内部 metadata 信号化机制见 channels overview 的 [Webhook `deliver_only` 模式](/zh/integrations/channels#webhook-deliver_only-mode)。

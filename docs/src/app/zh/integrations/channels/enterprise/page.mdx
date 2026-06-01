@@ -1,0 +1,308 @@
+# 企业协作渠道
+
+## Microsoft Teams
+
+Teams 已从进程内 Rust 适配器迁移到 Python sidecar（`librefang.sidecar.adapters.teams`，仅依赖标准库）。原 `[channels.teams]` 块不再识别。
+
+### 前置条件
+
+- 拥有 [Azure Bot Service](https://learn.microsoft.com/en-us/microsoftteams/platform/) 访问权限的 Microsoft Azure 账户
+- 已注册的 Azure AD 应用，具备 Client ID 和 Secret
+- 守护进程主机上有 `python3`（无须任何 Python 第三方包）
+
+### 设置步骤
+
+1. 前往 [Azure 门户](https://portal.azure.com/)，创建新的 **Bot Channels Registration**（或 Azure Bot 资源）。
+2. 在 **Configuration** 中记录 **Microsoft App ID**。
+3. 前往 **Certificates & secrets**，创建新的客户端密钥并立即复制。
+4. 在 Teams 管理中心为组织启用 Bot，或上传自定义应用 manifest。
+5. 在 Teams 后台的 **Outgoing Webhook** 设置（或 Channels 配置）里复制 **Security Token**（base64）—— 用于校验每条入站请求的 HMAC-SHA256。
+6. 添加到 `config.toml`：
+
+```toml
+[[sidecar_channels]]
+name = "teams"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.teams"]
+channel_type = "teams"
+[sidecar_channels.env]
+TEAMS_APP_ID = "00000000-0000-0000-0000-000000000000"
+TEAMS_WEBHOOK_PORT = "8459"
+# TEAMS_ALLOWED_TENANTS = "tenant-a,tenant-b"   # 留空允许所有
+```
+
+7. 将 `TEAMS_APP_PASSWORD`（客户端密钥）+ `TEAMS_SECURITY_TOKEN` 写入 `~/.librefang/secrets.env`（仪表盘 Channels 页填表时会自动写入）。
+8. 在 Azure Bot Channel 配置里把消息端点指向你 sidecar 的公网 URL —— 例如 `https://your-domain.com:8459/webhook`。
+9. 重启守护进程。
+
+### 工作原理
+
+sidecar 自己跑 webhook server（标准库 `BaseHTTPRequestHandler`），用 base64-decoded `TEAMS_SECURITY_TOKEN` 校验每条入站的 `Authorization: HMAC <…>` 签名后解析 Bot Framework activity。出站回复通过 OAuth2 client-credentials 流获取 bearer token（5 分钟缓冲缓存），POST 到 `{serviceUrl}/v3/conversations/{id}/activities`。每个 conversation 的 `serviceUrl` 从最近一条入站消息缓存，回复落到正确的 Microsoft 区域（相对 Rust 版的改进 —— 它一律走默认 `smba.trafficmanager.net`）。
+
+---
+
+## Mattermost（Sidecar）
+
+Mattermost 已从进程内 Rust 适配器迁移到进程外 Python sidecar（`librefang.sidecar.adapters.mattermost`）。
+
+### 前置条件
+
+- 一个 Mattermost 服务器（自托管或云版本），具备管理员权限
+- Bot 账户或个人访问令牌
+- Python 3 + `librefang` SDK（`pip install -e sdk/python`）
+
+### 设置步骤
+
+1. 在 Mattermost 中，前往 **Integrations > Bot Accounts** 创建新 Bot，或前往 **Account Settings > Security > Personal Access Tokens** 生成令牌。
+2. 复制令牌并写入 `~/.librefang/secrets.env`：
+
+```bash
+MATTERMOST_TOKEN=your-bot-token
+```
+
+3. 在 `~/.librefang/config.toml` 中声明 sidecar：
+
+```toml
+[[sidecar_channels]]
+name = "mattermost"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.mattermost"]
+channel_type = "mattermost"
+default_agent = "ops"
+[sidecar_channels.env]
+MATTERMOST_SERVER_URL = "https://mattermost.example.com"
+# MATTERMOST_ALLOWED_CHANNELS = "ch-id-1,ch-id-2"    # 可选，空 = 全部
+# MATTERMOST_ACCOUNT_ID = "team-prod"                # 可选，多 Bot 路由
+```
+
+4. 重启守护进程。
+
+### 工作原理
+
+Sidecar 通过 WebSocket 连接到 Mattermost 服务器（`wss://<host>/api/v4/websocket`），在握手完成后立即发送 `authentication_challenge`。订阅 `posted` 事件，按 `post.id` 去重后通过 stdio 推送给内核。出站消息使用 `POST /api/v4/posts`，并把入站的 `root_id` 透传回去，保证线程内回复仍留在原线程。
+
+---
+
+## Google Chat
+
+### 前置条件
+
+- 已启用 [Google Chat API](https://developers.google.com/workspace/chat/) 的 Google Cloud 项目
+- 服务账户密钥文件（JSON）
+
+### 设置步骤
+
+1. 在 [Google Cloud 控制台](https://console.cloud.google.com/) 中启用 Google Chat API。
+2. 创建服务账户并下载 JSON 密钥文件。
+3. 在 Google Chat API 设置中配置 Chat 应用，选择 **HTTP endpoint** 连接类型。
+4. 设置环境变量：
+
+```bash
+export GOOGLE_CHAT_SA_KEY=/path/to/sa-key.json  # 环境变量
+export GOOGLE_CHAT_SPACE=spaces/AAAA_BBBBBB
+librefang vault set GOOGLE_CHAT_SA_KEY        # 加密金库（推荐）
+librefang vault set GOOGLE_CHAT_SPACE
+librefang config set-key google_chat          # .env 文件
+# 或通过仪表板 "Set API Key" 按钮设置          # secrets.env
+```
+
+5. 添加到配置文件（Google Chat 以独立进程 sidecar 形式运行，模块 `librefang.sidecar.adapters.google_chat`）：
+
+```toml
+[[sidecar_channels]]
+name = "google_chat"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.google_chat"]
+channel_type = "google_chat"
+[sidecar_channels.env]
+GOOGLE_CHAT_WEBHOOK_PORT = "8090"
+# GOOGLE_CHAT_SPACE_IDS = "spaces/AAAA,spaces/BBBB"   # 可选，空 = 所有 space
+# GOOGLE_CHAT_ACCOUNT_ID = "ops"                      # 可选，多机器人路由
+```
+
+`GOOGLE_CHAT_SERVICE_ACCOUNT_JSON`（完整的 JSON blob 字符串 —— 不是路径）写入 `~/.librefang/secrets.env`。
+
+6. 热加载（`curl -X POST http://127.0.0.1:4545/api/channels/reload`）或者重启 daemon。
+
+### 工作原理
+
+Sidecar 通过服务账户 JSON 认证，在 `GOOGLE_CHAT_WEBHOOK_PORT`（默认 8090）上跑自己的 HTTP webhook 服务。Google Cloud Console 上 Bot 配置的 messaging endpoint 改成 `https://<host>:<port>/webhook`。回复通过 Google Chat REST API 用入站消息里携带的 space + thread ID 发回。
+
+---
+
+## Webex (sidecar)
+
+### 前置条件
+
+- Webex Bot 令牌（从 [Webex 开发者门户](https://developer.webex.com/docs/api/getting-started) 获取）
+
+### 设置步骤
+
+Webex 已在 v2026.5 中迁移为 out-of-process sidecar（替换原 in-process Rust 适配器）。Bot Bearer 令牌存放在 `~/.librefang/secrets.env`，而不是 `config.toml`。
+
+1. 前往 [developer.webex.com](https://developer.webex.com/) 并登录。
+2. 导航到 **My Webex Apps** 并创建新 Bot。
+3. 复制 Bot 访问令牌。
+4. 将令牌写入 `~/.librefang/secrets.env`（仪表板的 Channels 页面会自动处理）：
+
+```bash
+WEBEX_BOT_TOKEN=your-webex-bot-token
+```
+
+5. 在 `config.toml` 中声明 sidecar：
+
+```bash
+[[sidecar_channels]]
+name = "webex"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webex"]
+channel_type = "webex"
+default_agent = "assistant"
+
+[sidecar_channels.env]
+# WEBEX_ALLOWED_ROOMS = "Y2lz...A,Y2lz...B"  # 可选，留空 = 所有房间
+# WEBEX_ACCOUNT_ID = "org-prod"              # 可选，多机器人路由
+```
+
+6. 重启守护进程。
+
+### 工作原理
+
+Webex sidecar（`librefang.sidecar.adapters.webex`）连接 Cisco 的 Mercury WebSocket 网关接收实时消息活动，然后通过 Webex REST API（`GET /messages/<id>`）获取完整消息正文。出站回复通过 `POST /messages` 发送，可选地附带 `parentId` 以串入起源消息的线程（相对原 Rust 适配器从未发送 `parentId` 的改进）。两侧的 429 响应都遵循 `Retry-After` 头并重试一次。
+
+---
+
+## 飞书 / Lark
+
+飞书 / Lark 现以 Python sidecar 适配器（`librefang.sidecar.adapters.feishu`）提供。原 in-process `[channels.feishu]` 配置块已被移除。请改为通过 `[[sidecar_channels]]` 条目声明。
+
+### 前置条件
+
+- 具备 Bot 能力的飞书（或 Lark）自建应用（从[飞书开放平台](https://open.feishu.cn/document/)创建）
+- 守护进程主机上有 `python3`（无须第三方 Python 包——sidecar 仅依赖标准库）
+
+### 设置步骤
+
+1. 前往[飞书开放平台](https://open.feishu.cn/)，创建自建应用。
+2. 在应用能力中启用 **机器人**。
+3. 从应用凭证页面记录 **App ID** 和 **App Secret**。
+4. 添加到 `config.toml`：
+
+```toml
+[[sidecar_channels]]
+name = "feishu"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.feishu"]
+channel_type = "feishu"
+[sidecar_channels.env]
+FEISHU_APP_ID = "cli_abc123"
+# FEISHU_REGION = "cn"                       # cn（默认）或 intl（Lark）
+# FEISHU_RECEIVE_MODE = "websocket"          # websocket（默认）或 webhook
+# FEISHU_WEBHOOK_PORT = "8453"               # 仅 webhook 模式
+# FEISHU_VERIFICATION_TOKEN = "..."          # 仅 webhook 模式
+# FEISHU_ENCRYPT_KEY = "..."                 # 仅 webhook 模式——AES-256-CBC 加密载荷
+# FEISHU_ACCOUNT_ID = "prod"                 # 可选，多 bot 路由标识
+```
+
+5. 把 `FEISHU_APP_SECRET` 放到 `~/.librefang/secrets.env`（在仪表盘 Channels 页填写飞书表单时会自动写入）。
+6. 重启守护进程。
+
+### 工作原理
+
+sidecar 默认 `websocket` 模式：通过 `POST /callback/ws/endpoint` 获取真实的 `wss://` URL，并打开长连接到事件网关（无需公网 IP）。`webhook` 模式监听 `FEISHU_WEBHOOK_PORT`，配置 `FEISHU_ENCRYPT_KEY` 时支持 AES-256-CBC + PKCS7 加密载荷。外发回复通过 `POST /open-apis/im/v1/messages` 发送，tenant access token 自动缓存并刷新（2 小时有效，提前 5 分钟刷新）。
+
+<Note type="warning">
+**从 in-process 适配器迁移（webhook 模式）**：webhook URL 变了。原来的 in-process 适配器在 `<api-host>:<api-port>/channels/feishu/webhook`（共享 API 端口）。sidecar 在 `FEISHU_WEBHOOK_PORT`（默认 `8453`）启动独立 HTTP 服务器，URL 是 `<sidecar-host>:8453/webhook`。在 sidecar 启动前，**先到飞书开放平台后台更新事件订阅 URL**。
+
+超过 1 MiB 的请求体会返回 `413 Payload Too Large`——飞书事件实际都远小于 64 KB，这个上限是为了防止恶意发送方 OOM。
+</Note>
+
+### 处理状态反应（Reactions）
+
+飞书通过给用户消息加 `Typing` reaction 显示"我在处理"反馈,回复发出后再移除。两个调用都是 fire-and-forget —— API 失败仅记录 warning，永远不阻塞消息处理。详见 channels overview 的 [Reactions and Processing State](/zh/integrations/channels#reactions-and-processing-state)。
+
+### @ 提及保留
+
+sidecar 把每个 `@_user_N` 占位符替换成 `@<display-name>`（从 mention payload 解析,name 缺省时退回 `open_id`），把 `@_all` 改写成 `@all`。Agent 看到的是原本的对话语气 ——"@alice 你看下这个" —— 而不是光秃秃的标点。详见 [Feishu @Mention Preservation](/zh/integrations/channels#feishu-mention-preservation)。
+
+---
+
+## Rocket.Chat
+
+Rocket.Chat 现以 Python sidecar 适配器（`librefang.sidecar.adapters.rocketchat`）提供。在迁移过程中，原 in-process `[channels.rocketchat]` 配置块已被移除。请改为通过 `[[sidecar_channels]]` 条目声明 Rocket.Chat。
+
+### 前置条件
+
+- 具备管理员权限的 Rocket.Chat 服务器
+- Bot 用户账户及其个人访问令牌
+- 守护进程主机上安装有 Python 3.8+（sidecar 以 `python3 -m librefang.sidecar.adapters.rocketchat` 运行）
+
+### 设置步骤
+
+1. 在 Rocket.Chat 中，前往 **Administration > Users** 创建 Bot 用户（或选用已有服务账户）。
+2. 以该 Bot 身份登录，通过 **My Account > Personal Access Tokens** 生成个人访问令牌。同时记下令牌和 Bot 的用户 ID。
+3. 在 `config.toml` 中添加 sidecar 配置：
+
+```bash
+[[sidecar_channels]]
+name = "rocketchat"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.rocketchat"]
+channel_type = "rocketchat"
+[sidecar_channels.env]
+ROCKETCHAT_SERVER_URL = "https://chat.example.com"
+ROCKETCHAT_USER_ID = "abc123"
+# ROCKETCHAT_CHANNELS = "GENERAL,room2"        # 可选；留空 = 所有已加入频道
+# ROCKETCHAT_ACCOUNT_ID = "prod"                # 可选，多 Bot 路由键
+# ROCKETCHAT_POLL_INTERVAL_SECS = "2"           # 可选，默认 2，下限 1
+```
+
+4. 将 `ROCKETCHAT_TOKEN`（个人访问令牌）写入 `~/.librefang/secrets.env`——在仪表板的 Channels 页面填写 Rocket.Chat 表单时会自动写入。
+5. 重启守护进程。
+
+### 工作原理
+
+Sidecar 按配置间隔（默认 2 秒）通过 `X-Auth-Token` / `X-User-Id` 头部对每个房间轮询 `GET /api/v1/channels.history`。斜杠命令（`/cmd args`）转为 `Command` 事件，其余视为纯文本。出站回复经由 `POST /api/v1/chat.postMessage` 发送；当入站消息位于线程中时，会通过 `tmid` 正确串连（这是相对原 Rust 适配器的改进，原适配器始终回到房间根部）。
+
+---
+
+## Zulip
+
+Zulip 现在由 Python sidecar 适配器 `librefang.sidecar.adapters.zulip` 提供。原 in-process 的 `[channels.zulip]` 配置块在 sidecar 迁移中已移除。
+
+### 前置条件
+
+- Zulip 服务器账户（云版或自托管版）
+- 在 **Settings > Your bots** 中创建的 Bot（参见 [Zulip API 文档](https://zulip.com/api/)）
+
+### 设置步骤
+
+1. 在 Zulip 中，前往 **Settings > Your bots**，点击 **Add a new bot**。
+2. 选择 **Generic bot** 类型并创建。
+3. 记录 Bot 的邮箱地址和 API 密钥。
+4. 在配置中声明 sidecar：
+
+```bash
+[[sidecar_channels]]
+name = "zulip"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.zulip"]
+channel_type = "zulip"
+[sidecar_channels.env]
+ZULIP_SERVER_URL = "https://myorg.zulipchat.com"
+ZULIP_BOT_EMAIL  = "bot-bot@myorg.zulipchat.com"
+# ZULIP_STREAMS = "engineering, general"      # 可选；空 = 所有已订阅 Stream
+# ZULIP_ACCOUNT_ID = "prod"                   # 可选，多 Bot 路由 key
+```
+
+5. 将 Bot 的 API Key 写入 `~/.librefang/secrets.env`：
+
+```bash
+ZULIP_API_KEY=your-api-key
+```
+
+6. 重启守护进程。
+
+### 工作原理
+
+Sidecar 使用 Zulip 的 event queue API 进行长轮询。启动时调用 `GET /api/v1/users/me` 发现 Bot 的稳定 `user_id`，通过 `POST /api/v1/register`（按 `ZULIP_STREAMS` 收窄）注册事件队列，然后长轮询 `GET /api/v1/events` 直到关闭。入站消息按 Bot 自身 `user_id` 自跳（Bot 改名也不会破自跳），按 `message.id` 去重（`BAD_EVENT_QUEUE_ID` 重新注册也不会重发同一条消息）。出站响应走 `POST /api/v1/messages`，用 `cmd.thread_id` 作为目标 topic，所以回复始终留在原 topic。四条 REST 路径上的 429 都遵守 `Retry-After`。

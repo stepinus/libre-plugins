@@ -1,0 +1,9 @@
+[submodule "implements/lcm"]
+	path = implements/lcm
+	url = https://github.com/lossless-claude/lcm.git
+[submodule "implements/lcm-context-engine-hermes-plugin"]
+	path = implements/lcm-context-engine-hermes-plugin
+	url = https://github.com/jakedomshoots/lcm-context-engine-hermes-plugin.git
+[submodule "librefang-registry"]
+	path = librefang-registry
+	url = https://github.com/librefang/librefang-registry.git

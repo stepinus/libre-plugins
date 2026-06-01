@@ -1,0 +1,606 @@
+# Memory System
+
+LibreFang's memory system provides persistent storage, semantic search, and knowledge graph functionality.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Session Management](#session-management)
+- [Memory Operations](#memory-operations)
+- [Vector Search](#vector-search)
+- [Knowledge Graph](#knowledge-graph)
+- [Session Compaction](#session-compaction)
+- [Background Consolidation (Auto-Dream)](#background-consolidation-auto-dream)
+- [Memory Provider Plugin API](#memory-provider-plugin-api)
+- [Usage Tracking](#usage-tracking)
+- [API Endpoints](#api-endpoints)
+- [Best Practices](#best-practices)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+The LibreFang memory system includes:
+
+- **SQLite Persistence** - Structured KV storage
+- **Vector Embeddings** - Semantic search capability
+- **Knowledge Graph** - Entities and relationships
+- **Session Management** - Cross-channel memory
+- **Session Compaction** - Shrinks an active session when it grows past a threshold
+- **Auto-Dream** - Optional, opt-in background consolidation that asks agents to periodically reflect on and curate their own long-term memory. See [Background Consolidation (Auto-Dream)](#background-consolidation-auto-dream).
+- **Usage Tracking** - Cost and usage statistics
+
+<Note>
+**Tip**: Memory data is stored in `~/.librefang/data/librefang.db` by default, with configurable storage path.
+</Note>
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│              Agent Loop                  │
+└─────────────────┬───────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────┐
+│           Memory Subsystem               │
+├─────────────────────────────────────────┤
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
+│  │ Session │  │ Vector  │  │Knowledge│  │
+│  │ Store   │  │ Search  │  │ Graph   │  │
+│  └─────────┘  └─────────┘  └─────────┘  │
+├─────────────────────────────────────────┤
+│           SQLite Database               │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## Configuration
+
+### Basic Configuration
+
+```toml
+[memory]
+decay_rate = 0.05
+sqlite_path = "~/.librefang/data/librefang.db"
+```
+
+### Advanced Configuration
+
+```toml
+[memory]
+decay_rate = 0.05
+sqlite_path = "~/.librefang/data/librefang.db"
+vector_dimension = 1536
+max_memory_items = 10000
+auto_compact = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `decay_rate` | Float | 0.05 | Memory confidence decay rate |
+| `sqlite_path` | String | ~/.librefang/data/librefang.db | Database path |
+| `vector_dimension` | Integer | 1536 | Vector dimension |
+| `max_memory_items` | Integer | 10000 | Maximum memory entries |
+| `auto_compact` | Boolean | true | Auto compaction |
+
+---
+
+## Session Management
+
+### Create Session
+
+```bash
+# Create new session
+librefang session create --name "research-project"
+```
+
+### List Sessions
+
+```bash
+# List all sessions
+librefang session list
+```
+
+### Session Operations
+
+```bash
+# View session details
+librefang session info <session-id>
+
+# Delete session
+librefang session delete <session-id>
+
+# Compact session
+librefang session compact <session-id>
+
+# Export session
+librefang session export <session-id> --format json
+```
+
+---
+
+## Memory Operations
+
+### Store Memory
+
+```bash
+# Store simple memory
+librefang memory store <agent> "user:preference:theme" "dark"
+
+# Store a key-value pair (positional: agent key value)
+librefang memory store coder "project:version" "1.0"
+
+# Equivalent long form using the set subcommand
+librefang memory set coder "note:1" "Important note"
+```
+
+### Search Memory
+
+```bash
+# Keyword search
+librefang memory search "project"
+
+# Vector search (semantic search)
+librefang memory search --vector "find information about AI agents"
+
+# Search with filters
+librefang memory search "meeting" --tags "work" --limit 10
+```
+
+### Memory Operations
+
+```bash
+# Read memory
+librefang memory get <key>
+
+# Update memory
+librefang memory update <key> --value "new value"
+
+# Delete memory
+librefang memory delete <key>
+
+# List all memories
+librefang memory list --prefix "project:"
+```
+
+---
+
+## Vector Search
+
+### Semantic Search
+
+LibreFang supports semantic search with vector embeddings:
+
+```bash
+# Semantic search example
+librefang memory search --vector "machine learning techniques for text classification"
+```
+
+### Similarity Threshold
+
+```toml
+[memory]
+similarity_threshold = 0.75
+```
+
+### API Endpoint
+
+```bash
+# Semantic search API (GET with query params)
+curl "http://127.0.0.1:4545/api/memory/search?q=find+information+about+AI&limit=10&threshold=0.8"
+```
+
+---
+
+## Knowledge Graph
+
+### Entity Management
+
+```bash
+# Add entity
+librefang kg add-entity --type "person" --name "John Doe" --properties '{"role": "developer"}'
+
+# List entities
+librefang kg list-entities --type "person"
+
+# Search entities
+librefang kg search-entities "John"
+```
+
+### Relationship Management
+
+```bash
+# Add relationship
+librefang kg add-relation \
+  --from "person:john" \
+  --relation "works_at" \
+  --to "company:acme"
+
+# List relationships
+librefang kg list-relations --entity "person:john"
+
+# Query relationships
+librefang kg query --from "person:john" --relation "works_at"
+```
+
+### Graph Queries
+
+```bash
+# Query path
+librefang kg path --from "person:alice" --to "company:acme"
+
+# Query subgraph
+librefang kg subgraph --entity "person:bob" --depth 2
+```
+
+---
+
+## Session Compaction
+
+### Auto Compaction
+
+Automatic compaction when session message count reaches threshold. Compaction settings are managed internally by the runtime and are not exposed in `config.toml`. The default threshold is 80 messages, keeping the 20 most recent verbatim and summarizing the rest.
+
+### Manual Compaction
+
+```bash
+# Compact session
+librefang session compact <session-id>
+
+# Compact all sessions
+librefang session compact-all
+
+# View compaction status
+librefang session compaction-status
+```
+
+### Compaction Algorithm
+
+1. **Keep Recent N Messages**
+2. **Extract Key Information**
+3. **Generate Summary**
+4. **Keep Tool Call History**
+
+---
+
+## Background Consolidation (Auto-Dream)
+
+Session compaction keeps a **single session** from overflowing. Auto-dream is a complementary mechanism that works at a longer time horizon: once in a while it wakes an opted-in agent up, hands it a four-phase prompt (Orient / Gather / Consolidate / Prune), and lets the agent curate its own long-term memory across recent sessions — upserting durable insights via `memory_store` and trimming stale entries.
+
+<Note>
+**Disabled by default.** Auto-dream spends real tokens on a recurring schedule, so both the global switch and every agent's opt-in flag are `false` unless you turn them on. See [`[auto_dream]`](/configuration/core#auto_dream) for the full reference.
+</Note>
+
+### Enabling it
+
+Two toggles must both be `true`:
+
+```toml
+# ~/.librefang/config.toml
+[auto_dream]
+enabled = true
+min_hours = 24         # earliest a given agent can re-dream
+min_sessions = 5       # require this much real activity since the last dream
+```
+
+```toml
+# agent manifest (.toml)
+auto_dream_enabled = true
+
+# Optional per-agent overrides of the global thresholds
+auto_dream_min_hours = 168      # weekly, for a quiet agent
+auto_dream_min_sessions = 1     # after every session, for a chatty one
+```
+
+### How a dream runs
+
+1. The primary trigger is the `AgentLoopEnd` hook — the moment an agent finishes a turn, the kernel evaluates its four gates in order: global enabled → time since last dream → session activity count → per-agent file lock. Any miss and the dream is skipped. A sparse backstop scheduler (default `check_interval_secs = 86400` / 1 day) covers opted-in agents that never turn (e.g. channel bots waiting on inbound traffic).
+2. On a pass, the agent is invoked as a **forked turn** off the canonical session via `kernel.run_forked_agent_streaming` — same system prompt, tools, and message prefix as the parent turn so Anthropic's prompt cache hits. Fork turns don't persist their messages back to canonical session, so the user's conversation history isn't polluted by consolidation chatter. A runtime tool allowlist (`memory_store` / `memory_recall` / `memory_list`) is enforced at execute time, not request-build time, so the schema stays byte-identical to the parent and cache alignment holds. Prompt-injected dreams that try a non-memory tool get a synthetic error back and can't actually invoke anything outside the allowlist.
+3. Streamed progress (phase, tool calls, memories touched, last turn preview, token/cost) is kept in a per-agent registry and surfaced via the status endpoint.
+4. On success the lock's mtime advances to "now" (driving the time gate); on failure or abort the mtime is rolled back so the next tick will retry.
+
+### Surfaces
+
+- **Web Dashboard** — Settings → Auto-Dream card renders one row per agent with an opt-in toggle, live status badge, "Dream now" and "Abort" buttons, and a progress preview while the dream is in flight.
+- **TUI** — `librefang` → Dashboard tab shows a compact DREAMS strip with per-agent status glyphs; hides itself when no agent has dreamed yet.
+- **HTTP API** — `GET /api/auto-dream/status`, `POST /api/auto-dream/agents/{id}/trigger`, `POST /api/auto-dream/agents/{id}/abort`, `PUT /api/auto-dream/agents/{id}/enabled`.
+- **Audit trail** — Every dream emits a `DreamConsolidation` audit event with phase, token usage, and USD cost.
+
+### Manual controls
+
+- `POST /api/auto-dream/agents/{id}/trigger` bypasses the time and session gates (still respects the lock and the opt-in flag).
+- `POST /api/auto-dream/agents/{id}/abort` cancels an in-flight manual dream and rolls the lock back so the time gate reopens.
+- Scheduled dreams run inline and cannot be interrupted individually — they'll hit `timeout_secs` (default 600s) or finish.
+
+See [`[auto_dream]`](/configuration/core#auto_dream) for every field, default, and manifest override, plus how the runtime tool allowlist is enforced.
+
+---
+
+## Memory Provider Plugin API
+
+The `MemoryProvider` trait allows integrating external memory backends — such as vector databases, knowledge graphs, or remote storage services — alongside LibreFang's built-in SQLite memory.
+
+### Architecture
+
+- There is always **one built-in provider** (the default SQLite-backed store). It cannot be removed.
+- At most **one external provider** can be registered at a time. External providers supplement the built-in store; they do not replace it.
+- If an external provider fails, the built-in provider continues operating normally. Errors from external providers are captured, logged at `WARN` level, and never propagated to the agent loop.
+
+### Trait interface
+
+```rust
+#[async_trait]
+pub trait MemoryProvider: Send + Sync {
+    /// A short, unique name for this provider (e.g. "pinecone", "weaviate").
+    fn name(&self) -> &str;
+
+    /// Returns `true` for the built-in provider, `false` for all external providers.
+    fn is_builtin(&self) -> bool;
+
+    /// Returns a text block to inject into the agent system prompt at session start,
+    /// or `None` if there is nothing to inject for this session.
+    async fn system_prompt_block(&self, session_id: &str) -> Option<String>;
+
+    /// Fetches relevant context for the given query string before an LLM call.
+    /// The returned string is appended to the context window.
+    async fn prefetch(&self, query: &str, session_id: &str) -> Result<String, MemoryError>;
+
+    /// Called after each agent turn completes. Use this hook to index new content,
+    /// synchronize state, or flush write buffers to the external backend.
+    async fn on_turn_complete(&self, session_id: &str, turn_summary: &str) -> Result<(), MemoryError>;
+}
+```
+
+### Registering an external provider
+
+Pass your implementation to the kernel's memory subsystem during initialization:
+
+```rust
+use librefang_memory::{MemoryManager, MemoryProvider};
+
+// Build your custom provider
+let my_provider: Arc<dyn MemoryProvider> = Arc::new(MyVectorDbProvider::new(config));
+
+// Register it with the memory manager
+memory_manager.set_external_provider(my_provider).await;
+```
+
+Only one external provider can be registered at a time. Calling `set_external_provider` again replaces the previous one.
+
+### Aggregated context with `prefetch_all`
+
+The memory manager exposes `prefetch_all(query, session_id)`, which calls `prefetch` on every registered provider and concatenates the results:
+
+```rust
+// Called internally by the agent loop before each LLM request
+let context = memory_manager.prefetch_all(&user_query, &session_id).await;
+```
+
+Results from each provider are separated by a blank line and prepended with the provider name as a label. If any provider returns an error, that provider's result is skipped (with a `WARN` log) and the remaining providers are still queried.
+
+### Error isolation
+
+External provider errors never surface to the agent or the user:
+
+1. `prefetch` errors → logged at `WARN`, empty string used for that provider's contribution.
+2. `on_turn_complete` errors → logged at `WARN`, silently dropped.
+3. `system_prompt_block` errors (panics) → caught at the call site, `None` returned.
+
+This design ensures that a misconfigured or temporarily unavailable external backend cannot disrupt the agent loop.
+
+---
+
+## Usage Tracking
+
+### View Usage
+
+```bash
+# View usage statistics
+librefang usage
+
+# View Agent usage
+librefang usage --agent <agent-id>
+
+# View provider usage
+librefang usage --provider
+```
+
+### Cost Tracking
+
+```bash
+# View costs
+librefang cost
+
+# View costs by date range
+librefang cost --from 2025-01-01 --to 2025-01-31
+
+# Export report
+librefang cost export --format csv
+```
+
+---
+
+## API Endpoints
+
+### KV Memory Operations
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/memory/search` | GET | Search memory (query params: `q`, `limit`, `threshold`) |
+| `/api/memory` | POST | Store a memory entry |
+| `/api/memory/{id}` | GET | Get a specific memory entry |
+| `/api/memory/{id}` | DELETE | Delete a memory entry |
+
+### Session Operations
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/memory/sessions` | GET | List sessions |
+| `/api/memory/sessions/{id}` | GET | Get session details |
+| `/api/memory/sessions/{id}/compact` | POST | Compact session |
+
+### Knowledge Graph
+
+The knowledge graph lives **per-agent**, not as a global REST surface. Use the per-agent endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/memory/agents/{id}/relations` | GET | Query the agent's knowledge graph (entities + relations) |
+| `/api/memory/agents/{id}/relations` | POST | Store new relations on the agent's graph |
+
+Agents can also build the graph from inside the loop with the [`knowledge_add_entity` / `knowledge_add_relation` / `knowledge_query` tools](/agent/tools#knowledge-graph). The earlier `/api/memory/kg/*` endpoints in older documentation never shipped — those paths return 404.
+
+### Proactive Memory
+
+Proactive memory lets agents autonomously surface, consolidate, and recall long-term knowledge without explicit tool calls. Each entry is stored three ways simultaneously — semantic store (text + embedding), structured KV store (`memory:{id}`), and knowledge graph (extracted entity / relation triples) — so agents can recall a memory by similarity, by ID, or by traversing the graph from a known entity.
+
+#### Entry schema
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Unique memory identifier |
+| `agent_id` | UUID | Owning agent — entries are **scoped per agent**, no cross-agent leakage |
+| `content` | text | The memory text/fact |
+| `source` | enum | How created: `auto_memorize`, `manual_add`, … |
+| `scope` | enum | Level: `user_memory`, `session_memory`, `agent_memory` |
+| `confidence` | f64 (0.0–1.0) | Relevance score; decays over time |
+| `metadata` | JSON | Free-form KV; includes `category` (see below) |
+| `created_at` | RFC3339 timestamp | Creation time |
+| `accessed_at` | RFC3339 timestamp | Last access — drives decay |
+| `access_count` | int | Times this memory was recalled |
+| `deleted` | bool | Soft-delete flag |
+| `embedding` | vector (separate table) | For cosine similarity search |
+
+#### Scopes
+
+| Scope | Lifetime | Use |
+|---|---|---|
+| `user_memory` | Persistent across sessions | User-level facts and preferences (may be shared across this user's agents). |
+| `session_memory` | Auto-deleted after `session_ttl_hours` (default `24`) | Working notes for the current conversation. |
+| `agent_memory` | Per-agent persistent | Agent-learned behaviour and skills, isolated. |
+
+#### Categories
+
+Categories live on `metadata.category`. The defaults extracted by `auto_memorize` are: `communication_style`, `preference`, `expertise`, `work_style`, `project_context`, `personal_detail`, `frustration`. The category list is configurable.
+
+#### Auto-consolidation
+
+Triggered automatically every **10** `auto_memorize` calls per agent (no explicit cron / no user action needed). The consolidator:
+
+1. Finds duplicate or near-duplicate memories using a tiered similarity ladder:
+   - **Substring containment** (exact / superset / subset)
+   - **Vector cosine** (when embeddings stored)
+   - **Jaccard word overlap** (fallback)
+2. **Keeps the most recently created** of each duplicate cluster.
+3. Soft-deletes the rest and logs the merge count for audit.
+
+The consolidator only scans the most recent **100** entries to keep the dedup pass O(n²)-safe on a hot loop. Run a manual `POST /api/memory/agents/{id}/consolidate` to scan the full history.
+
+#### Decay
+
+For memories not accessed for more than 1 day:
+
+```
+decayed_conf = original_conf × e^(-decay_rate × days_since_access)
+final_conf   = min(decayed_conf × (1 + log2(access_count)), 1.0)
+```
+
+The decay sweep is **rate-limited to once per hour** (checked at the top of `auto_retrieve`). Defaults: `confidence_decay_rate = 0.01` (very slow — halves in roughly 70 days), `session_ttl_hours = 24`. A memory is "stale" when (a) untouched for more than a day, **or** (b) its scope is `session_memory` and the TTL has elapsed.
+
+#### Per-agent vs cross-agent
+
+All entries except `user_memory` are strictly per-agent. Search, consolidate, and eviction all filter on `agent_id` — there is no path for one agent to read another's `agent_memory` or `session_memory`. The per-agent cap defaults to **1000** entries; when exceeded the oldest / lowest-confidence entries are evicted.
+
+#### API endpoints
+
+The proactive-memory endpoints live under two roots — global and per-agent. (KV memory at `/api/memory/agents/{id}/kv/*` is a separate subsystem; not listed here.)
+
+**Global / cross-agent:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/memory` | List all proactive memories (paginated, optional `?category=`) |
+| POST | `/api/memory` | Add a memory entry |
+| GET | `/api/memory/search?q=&limit=` | Semantic search across all entries |
+| GET | `/api/memory/stats` | Global stats |
+| GET | `/api/memory/config` | Get memory config |
+| PATCH | `/api/memory/config` | Update memory config |
+| POST | `/api/memory/cleanup` | Manual session-TTL cleanup pass |
+| POST | `/api/memory/decay` | Manual confidence-decay pass |
+| POST | `/api/memory/bulk-delete` | Delete multiple entries |
+| PUT | `/api/memory/items/{id}` | Update a single memory |
+| DELETE | `/api/memory/items/{id}` | Delete a single memory |
+| GET | `/api/memory/items/{id}/history` | Memory edit history |
+| GET | `/api/memory/user/{user_id}` | User-level memories across all agents |
+
+**Per-agent:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/memory/agents/{id}` | List the agent's memories |
+| DELETE | `/api/memory/agents/{id}` | Reset (clear all of) the agent's memories |
+| GET | `/api/memory/agents/{id}/search?q=` | Agent-scoped semantic search |
+| GET | `/api/memory/agents/{id}/stats` | Per-agent stats |
+| DELETE | `/api/memory/agents/{id}/level/{level}` | Clear by scope (`session`, `agent`, `user`) |
+| GET | `/api/memory/agents/{id}/duplicates` | Find near-duplicates without deleting |
+| POST | `/api/memory/agents/{id}/consolidate` | Trigger consolidation on the full history |
+| GET | `/api/memory/agents/{id}/count` | Memory count |
+| GET | `/api/memory/agents/{id}/relations` | Query the agent's knowledge graph |
+| POST | `/api/memory/agents/{id}/relations` | Store relations |
+| GET | `/api/memory/agents/{id}/export` | Export the agent's memories (JSON) |
+| POST | `/api/memory/agents/{id}/import` | Import memories (JSON) |
+
+The earlier `/api/memory/proactive/*` namespace was a draft surface that never shipped — use the endpoints above. If your client still calls the old paths, expect 404.
+
+---
+
+## Best Practices
+
+1. **Regular Compaction** - Prevent sessions from growing too large
+2. **Use Tags** - Easy organization and search
+3. **Set Decay Rate** - Control memory confidence
+4. **Monitor Usage** - Track costs and usage
+
+---
+
+## Troubleshooting
+
+### Slow Memory Search
+
+```bash
+# Rebuild vector index
+librefang memory reindex
+
+# Check index status
+librefang memory index-status
+```
+
+### Database Bloat
+
+```bash
+# Clean old data
+librefang memory cleanup --older-than 30d
+
+# Vacuum database
+librefang memory vacuum
+```
+
+### Memory Loss
+
+```bash
+# Check database integrity
+librefang doctor
+
+# Restore backup
+librefang memory restore --backup <path>
+```
+

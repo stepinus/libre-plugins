@@ -1,0 +1,1018 @@
+# Feature Configuration
+
+Configuration for MCP servers, A2A integration, fallback providers, users, browser automation, reload behavior, execution policy, approval workflows, budget controls, thinking mode, text-to-speech, Docker sandboxing, canvas, auto-reply, broadcast, inbox, bindings, pairing, extensions, vault, webhook triggers, proxy, sessions, and queue management.
+
+---
+
+### `[[mcp_servers]]`
+
+MCP (Model Context Protocol) server connections provide external tool integration. Each entry is a separate `[[mcp_servers]]` array element.
+
+```toml
+[[mcp_servers]]
+name = "filesystem"
+timeout_secs = 30
+env = []
+
+[mcp_servers.transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"]
+```
+
+```toml
+[[mcp_servers]]
+name = "remote-api"
+timeout_secs = 60
+env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+[mcp_servers.transport]
+type = "sse"
+url = "https://mcp.example.com/sse"
+```
+
+```toml
+[[mcp_servers]]
+name = "my-http-backend"
+timeout_secs = 30
+
+[mcp_servers.transport]
+type = "http_compat"
+base_url = "https://tools.example.com"
+headers = [{name = "Authorization", value_env = "MY_API_KEY"}]
+
+[[mcp_servers.transport.tools]]
+name = "search"
+description = "Search documents"
+path = "/search"
+method = "post"
+```
+
+#### Streamable HTTP
+
+```toml
+[[mcp_servers]]
+name = "remote-tools"
+
+[mcp_servers.transport.Http]
+url = "https://mcp.example.com/v1"
+```
+
+Uses the Streamable HTTP transport (MCP spec 2025-03-26+). Unlike SSE, this is a simpler request/response pattern over standard HTTP POST.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *required* | Display name for this MCP server. Tools are namespaced as `mcp_{name}_{tool}`. |
+| `timeout_secs` | u64 | `30` | Request timeout in seconds. |
+| `env` | list of strings | `[]` | Environment variable names to pass through to the subprocess (stdio transport only). |
+
+**Transport variants** (tagged union on `type`):
+
+| `type` | Fields | Description |
+|--------|--------|-------------|
+| `stdio` | `command` (string), `args` (list of strings, default `[]`) | Spawn a subprocess, communicate via JSON-RPC over stdin/stdout. |
+| `sse` | `url` (string) | Connect to an HTTP Server-Sent Events endpoint. |
+| `Http` | `url` (string) | Streamable HTTP transport (MCP spec 2025-03-26+). Simple request/response over HTTP POST. |
+| `http_compat` | `base_url` (string), `headers` (list of header configs), `tools` (list of tool configs) | Built-in compatibility adapter for plain HTTP/JSON tool backends without a native MCP server. Each tool maps to an HTTP endpoint. |
+
+**`http_compat` header config:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | HTTP header name (e.g., `"Authorization"`). |
+| `value` | string or null | Static header value. |
+| `value_env` | string or null | Env var name whose value is used as the header value (preferred for secrets). |
+
+**`http_compat` tool config:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *required* | Tool name exposed to the LLM. |
+| `description` | string | `""` | Tool description shown to the LLM. |
+| `path` | string | *required* | HTTP path (e.g., `"/search"`). |
+| `method` | string | `"post"` | HTTP method: `get`, `post`, `put`, `patch`, `delete`. |
+| `request_mode` | string | `"json_body"` | How arguments are sent: `json_body`, `query`, `none`. |
+| `response_mode` | string | `"json"` | Response parsing: `json`, `text`. |
+| `input_schema` | object | `{"type":"object"}` | JSON Schema for the tool's input parameters. |
+
+---
+
+### `[a2a]`
+
+Agent-to-Agent protocol configuration, enabling inter-agent communication across LibreFang instances.
+
+```toml
+[a2a]
+enabled = true
+name = "LibreFang Agent OS"
+description = "My production agent OS"
+listen_path = "/a2a"
+
+[[a2a.external_agents]]
+name = "research-agent"
+url = "https://agent.example.com/.well-known/agent.json"
+
+[[a2a.external_agents]]
+name = "code-reviewer"
+url = "https://reviewer.example.com/.well-known/agent.json"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Whether A2A protocol is enabled. |
+| `name` | string | `"LibreFang Agent OS"` | Service-level display name shown in the well-known agent card. |
+| `description` | string | `""` | Service-level description shown in the well-known agent card. |
+| `listen_path` | string | `"/a2a"` | URL path prefix for A2A endpoints. |
+| `external_agents` | list of objects | `[]` | External A2A agents to discover and interact with. |
+
+**`external_agents` entries:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Display name for the external agent. |
+| `url` | string | Agent card endpoint URL (typically `/.well-known/agent.json`). |
+
+---
+
+### `[[fallback_providers]]`
+
+Fallback provider chain. When the primary LLM provider (`[default_model]`) fails, these are tried in order.
+
+```toml
+[[fallback_providers]]
+provider = "ollama"
+model = "llama3.2:latest"
+api_key_env = ""
+# base_url = "http://localhost:11434"
+
+[[fallback_providers]]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `""` | Provider name (e.g., `"ollama"`, `"groq"`, `"openai"`). |
+| `model` | string | `""` | Model identifier for this provider. |
+| `api_key_env` | string | `""` | Env var name for the API key. Empty for local providers (ollama, vllm, lmstudio). |
+| `base_url` | string or null | `null` | Base URL override. Uses catalog default if null. |
+
+---
+
+### `[[users]]`
+
+RBAC multi-user configuration. Users can be assigned roles and bound to channel platform identities.
+
+```toml
+[[users]]
+name = "Alice"
+role = "owner"
+api_key_hash = "sha256_hash_of_api_key"
+
+[users.channel_bindings]
+telegram = "123456"
+discord = "987654321"
+slack = "U0ABCDEFG"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | *required* | User display name. |
+| `role` | string | `"user"` | User role in the RBAC hierarchy. |
+| `channel_bindings` | map of string to string | `{}` | Maps channel platform names to platform-specific user IDs, binding this user identity across channels. |
+| `api_key_hash` | string or null | `null` | SHA256 hash of the user's personal API key for authenticated API access. |
+
+**Role hierarchy** (highest to lowest privilege):
+
+| Role | Description |
+|------|-------------|
+| `owner` | Full administrative access. Can manage all agents, users, and configuration. |
+| `admin` | Can manage agents and most settings. Cannot modify owner accounts. |
+| `user` | Can interact with agents. Limited management capabilities. |
+| `viewer` | Read-only access. Can view agent responses but cannot send messages. |
+
+---
+
+
+### `[browser]`
+
+Configures the headless browser automation engine used by the `browser_*` agent tools.
+
+```toml
+[browser]
+enabled = true
+headless = true
+viewport_width = 1280
+viewport_height = 720
+timeout_secs = 30
+idle_timeout_secs = 300
+max_sessions = 5
+# chromium_path = "/usr/bin/chromium"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the built-in CDP browser tools. Set to `false` to disable all `browser_*` tools. |
+| `headless` | bool | `true` | Run browser in headless mode (no visible window). |
+| `viewport_width` | u32 | `1280` | Browser viewport width in pixels. |
+| `viewport_height` | u32 | `720` | Browser viewport height in pixels. |
+| `timeout_secs` | u64 | `30` | Per-action timeout in seconds. |
+| `idle_timeout_secs` | u64 | `300` | Auto-close browser session after this many seconds of inactivity. |
+| `max_sessions` | usize | `5` | Maximum concurrent browser sessions. |
+| `chromium_path` | string or null | `null` | Path to the Chromium/Chrome binary. Auto-detected if null. |
+
+---
+
+### `[reload]`
+
+Controls automatic config file watching and hot-reloading.
+
+```toml
+[reload]
+mode = "hybrid"
+debounce_ms = 500
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"hybrid"` | Reload mode. See below. |
+| `debounce_ms` | u64 | `500` | Debounce window in milliseconds before reloading after a file change is detected. |
+
+**`mode` values:**
+
+| Value | Description |
+|-------|-------------|
+| `off` | No automatic reloading. Changes require a manual restart. |
+| `restart` | Full daemon restart on any config change. |
+| `hot` | Hot-reload safe sections only (channels, skills, heartbeat). |
+| `hybrid` | Hot-reload where possible; flag restart-required for sections that need it (default). |
+
+**Hot-reloadable sections (no restart required):**
+
+The following config sections can be changed in `config.toml` while the daemon is running. Changes are detected automatically (polled every 30 seconds):
+
+- `[channels]` — add, remove, or reconfigure channel adapters
+- `[[skills]]` — skill registry
+- `[proxy]` — HTTP/HTTPS/SOCKS5 proxy settings
+- `[browser]` — browser automation settings
+- `[web]` — web search/scraping config
+- `[approval]` — approval policy
+- `[cron]` — cron job settings
+- `[webhook_triggers]` — webhook triggers
+- `[extensions]` — extension config
+- `[[mcp_servers]]` — MCP server connections
+- `[a2a]` — Agent-to-Agent protocol config
+- `[fallback_providers]` — fallback provider chain
+- `provider_urls` — provider base URL overrides
+- `default_model` — default model selection
+- `tool_policy` — tool filtering rules
+- `proactive_memory` — proactive memory thresholds
+- `provider_api_keys` — provider API keys (flushes driver cache)
+- `usage_footer` — usage footer mode
+- `sanitize` — input sanitization rules
+
+**Restart-required sections:** `home_dir`, `data_dir`, `api_listen`, `tls`, `telemetry`. Changes to these fields are logged as warnings but only take effect after restart.
+
+---
+
+### `[exec_policy]`
+
+Controls which shell commands agents are allowed to execute via the `exec` and `shell` tools.
+
+```toml
+[exec_policy]
+mode = "allowlist"
+allowed_commands = ["git", "python3", "node"]
+timeout_secs = 30
+max_output_bytes = 102400
+no_output_timeout_secs = 30
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `"allowlist"` | Security mode. See below. |
+| `safe_bins` | list of strings | `["sleep","true","false","cat","sort","uniq","cut","tr","head","tail","wc","date","echo","printf","basename","dirname","pwd","env"]` | Commands that always bypass the allowlist check (stdin-only POSIX utilities). |
+| `allowed_commands` | list of strings | `[]` | Additional commands permitted when `mode = "allowlist"`. |
+| `timeout_secs` | u64 | `30` | Maximum wall-clock execution time per command in seconds. |
+| `max_output_bytes` | usize | `102400` | Maximum combined stdout+stderr output size in bytes (100 KB default). |
+| `no_output_timeout_secs` | u64 | `30` | Kill processes that produce no output for this many seconds. `0` = disabled. |
+
+**`mode` values:**
+
+| Value | Aliases | Description |
+|-------|---------|-------------|
+| `deny` | `none`, `disabled` | Block all shell execution. |
+| `allowlist` | `restricted` | Only allow commands in `safe_bins` or `allowed_commands` (default). |
+| `full` | `allow`, `all`, `unrestricted` | Allow all commands. Unsafe -- development use only. |
+
+---
+
+### `[approval]`
+
+Configures which tools require explicit human approval before execution. References the `ApprovalPolicy` type.
+
+```toml
+[approval]
+require_approval = ["shell_exec"]
+timeout_secs = 60
+auto_approve_autonomous = false
+auto_approve = false
+second_factor = "none"
+totp_issuer = "LibreFang"
+totp_grace_period_secs = 300
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `require_approval` | list of strings | `["shell_exec"]` | List of tool names that pause execution and wait for human approval before proceeding. |
+| `timeout_secs` | u64 | `60` | Timeout for approval requests in seconds. |
+| `auto_approve_autonomous` | bool | `false` | Auto-approve tools when agent is in autonomous mode. |
+| `auto_approve` | bool | `false` | Auto-approve all tool executions (unsafe, dev only). |
+| `second_factor` | string | `"none"` | Second-factor verification: `"none"` or `"totp"`. When `"totp"`, approvals require a 6-digit TOTP code from an authenticator app. |
+| `totp_issuer` | string | `"LibreFang"` | Issuer name displayed in authenticator apps during enrollment. |
+| `totp_grace_period_secs` | u64 | `300` | After a successful TOTP verification, skip re-verification for this many seconds. Set to `0` to always require a code. Max: `3600`. |
+| `totp_tools` | list of strings | `[]` | Tools requiring TOTP (glob patterns supported). Empty = all tools in `require_approval` need TOTP. Example: `["shell_exec"]`. |
+
+#### TOTP Setup
+
+When `second_factor = "totp"`, you must first enroll an authenticator app:
+
+1. **Generate secret:** `POST /api/approvals/totp/setup` — returns a base32 secret, `otpauth://` URI, QR code (base64 PNG), and 8 recovery codes.
+2. **Add to authenticator:** Scan the QR code or enter the secret in Google Authenticator, 1Password, Authy, etc.
+3. **Save recovery codes:** Store the 8 recovery codes safely — each can be used once in place of a TOTP code if you lose your authenticator device.
+4. **Confirm enrollment:** `POST /api/approvals/totp/confirm` with `{"code": "123456"}` — verifies a code from the app.
+5. **Enable enforcement:** Set `second_factor = "totp"` in config (hot-reloadable).
+
+You can also set up TOTP from the Dashboard under **Settings > Security**.
+
+Once enforced, the approval flow changes:
+- **Dashboard:** Clicking "Approve" prompts for a 6-digit code inline.
+- **Channel (Telegram/Slack):** Use `/approve <id> <6-digit-code>` instead of `/approve <id>`.
+- **API:** Send `{"totp_code": "123456"}` in the body of `POST /api/approvals/{id}/approve`.
+- **Recovery:** Send a recovery code (format: `xxxx-xxxx`) in place of a TOTP code. Each recovery code is consumed on use.
+
+To revoke TOTP, use `DELETE /api/approvals/totp` with `{"code": "..."}` or use the Dashboard. Resetting requires verification with a current TOTP or recovery code.
+
+**Rate limiting:** 5 consecutive TOTP failures lock the account for 5 minutes.
+
+The TOTP secret is stored in the encrypted vault (`~/.librefang/vault.enc`) using AES-256-GCM.
+
+---
+
+### `[budget]`
+
+Sets global spending limits for LLM API costs. All limits default to `0.0` (unlimited).
+
+```toml
+[budget]
+max_hourly_usd = 1.00
+max_daily_usd = 10.00
+max_monthly_usd = 50.00
+alert_threshold = 0.8
+default_max_llm_tokens_per_hour = 0
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_hourly_usd` | f64 | `0.0` | Maximum total LLM cost in USD per hour across all agents. `0.0` = unlimited. |
+| `max_daily_usd` | f64 | `0.0` | Maximum total LLM cost in USD per day across all agents. `0.0` = unlimited. |
+| `max_monthly_usd` | f64 | `0.0` | Maximum total LLM cost in USD per month across all agents. `0.0` = unlimited. |
+| `alert_threshold` | f64 | `0.8` | Warning threshold as a fraction of each limit (0.0–1.0). At 0.8, warnings are logged when 80% of a limit is reached. |
+| `default_max_llm_tokens_per_hour` | u64 | `0` | Global override for per-agent hourly token budget. When `> 0`, overrides all agents' own token limits. `0` = keep each agent's own limit. |
+
+#### Per-provider caps (`[budget.providers.<id>]`)
+
+When you mix a free local provider (e.g. `litellm`, `ollama`) with paid ones (e.g. `moonshot`, `openai`), you can cap spending on the paid providers without throttling the free ones. Provider IDs must match the `provider` field of your agents' `[model]` blocks. Missing or zero limits mean unlimited.
+
+```toml
+[budget.providers.moonshot]
+max_cost_per_day_usd = 2.0
+max_tokens_per_hour = 500000
+
+[budget.providers.openai]
+max_cost_per_hour_usd = 1.0
+max_cost_per_month_usd = 50.0
+
+[budget.providers.litellm]
+# omitted or all zeros = unlimited
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_cost_per_hour_usd` | f64 | `0.0` | Hourly cost cap for this provider. `0.0` = unlimited. |
+| `max_cost_per_day_usd` | f64 | `0.0` | Daily cost cap for this provider. `0.0` = unlimited. |
+| `max_cost_per_month_usd` | f64 | `0.0` | Monthly cost cap for this provider. `0.0` = unlimited. |
+| `max_tokens_per_hour` | u64 | `0` | Hourly token cap (input + output) for this provider. `0` = unlimited. |
+
+When a per-provider limit is hit, the dispatch fails with a `QuotaExceeded` error mentioning the provider name — usage on other providers is unaffected.
+
+---
+
+### `[thinking]`
+
+Configures extended thinking (chain-of-thought reasoning) for models that support it (e.g., Claude 3.7 Sonnet with `thinking` mode).
+
+```toml
+[thinking]
+budget_tokens = 10000
+stream_thinking = false
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `budget_tokens` | u32 | `10000` | Maximum tokens allocated for the thinking/reasoning phase. |
+| `stream_thinking` | bool | `false` | Whether to stream thinking tokens to the client (visible in the API response stream). |
+
+---
+
+### `[tts]`
+
+Configures text-to-speech synthesis for voice output.
+
+```toml
+[tts]
+enabled = false
+provider = "openai"          # openai | elevenlabs | google_tts
+max_text_length = 4096
+timeout_secs = 30
+
+[tts.openai]
+voice = "alloy"
+model = "tts-1"
+format = "mp3"
+speed = 1.0
+
+[tts.elevenlabs]
+voice_id = "21m00Tcm4TlvDq8ikWAM"
+model_id = "eleven_monolingual_v1"
+stability = 0.5
+similarity_boost = 0.75
+
+[tts.google]
+voice = "en-US-Standard-F"
+language_code = "en-US"
+speaking_rate = 1.0
+pitch = 0.0
+format = "mp3"
+```
+
+**`[tts]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable TTS synthesis. |
+| `provider` | string or null | `null` | Default TTS provider: `"openai"`, `"elevenlabs"`, or `"google_tts"`. |
+| `max_text_length` | usize | `4096` | Maximum text length in characters for a single TTS request. |
+| `timeout_secs` | u64 | `30` | Request timeout per TTS call in seconds. |
+
+**`[tts.openai]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `voice` | string | `"alloy"` | Voice name. Options: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`. |
+| `model` | string | `"tts-1"` | TTS model: `"tts-1"` (fast) or `"tts-1-hd"` (high quality). |
+| `format` | string | `"mp3"` | Output format: `mp3`, `opus`, `aac`, `flac`. |
+| `speed` | f32 | `1.0` | Speech speed multiplier (0.25 to 4.0). |
+
+**`[tts.elevenlabs]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `voice_id` | string | `"21m00Tcm4TlvDq8ikWAM"` | ElevenLabs voice ID (default: Rachel). |
+| `model_id` | string | `"eleven_monolingual_v1"` | ElevenLabs model ID. |
+| `stability` | f32 | `0.5` | Voice stability (0.0–1.0). Higher = more consistent, less expressive. |
+| `similarity_boost` | f32 | `0.75` | Voice similarity boost (0.0–1.0). |
+
+**`[tts.google]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `voice` | string | `"en-US-Standard-F"` | Google TTS voice name (e.g. `en-US-Standard-F`, `pl-PL-Wavenet-A`). |
+| `language_code` | string | `"en-US"` | BCP-47 language code (e.g. `en-US`, `pl-PL`). |
+| `speaking_rate` | f32 | `1.0` | Speaking rate multiplier (0.25 to 4.0). |
+| `pitch` | f32 | `0.0` | Pitch adjustment in semitones (-20.0 to 20.0). |
+| `format` | string | `"mp3"` | Output format: `mp3`, `opus`, `wav`. |
+
+Requires `GOOGLE_API_KEY` or `GOOGLE_CLOUD_API_KEY` environment variable.
+
+---
+
+### `[docker]`
+
+Configures the Docker container sandbox for isolated code execution.
+
+```toml
+[docker]
+enabled = false
+image = "python:3.12-slim"
+container_prefix = "librefang-sandbox"
+workdir = "/workspace"
+network = "none"
+memory_limit = "512m"
+cpu_limit = 1.0
+timeout_secs = 60
+read_only_root = true
+mode = "off"
+scope = "session"
+reuse_cool_secs = 300
+idle_timeout_secs = 86400
+max_age_secs = 604800
+blocked_mounts = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Docker sandbox for code execution. |
+| `image` | string | `"python:3.12-slim"` | Docker image to use for the sandbox container. |
+| `container_prefix` | string | `"librefang-sandbox"` | Prefix for container names. |
+| `workdir` | string | `"/workspace"` | Working directory inside the container. |
+| `network` | string | `"none"` | Network mode: `"none"` (isolated), `"bridge"`, or a custom network name. |
+| `memory_limit` | string | `"512m"` | Memory limit (e.g., `"256m"`, `"1g"`). |
+| `cpu_limit` | f64 | `1.0` | CPU limit (e.g., `0.5`, `1.0`, `2.0`). |
+| `timeout_secs` | u64 | `60` | Maximum execution time per command in seconds. |
+| `read_only_root` | bool | `true` | Mount the root filesystem as read-only. |
+| `mode` | string | `"off"` | Activation mode. See below. |
+| `scope` | string | `"session"` | Container lifecycle scope. See below. |
+| `reuse_cool_secs` | u64 | `300` | Cooldown in seconds before a released container can be reused. |
+| `idle_timeout_secs` | u64 | `86400` | Destroy containers after this many seconds of inactivity (24 hours default). |
+| `max_age_secs` | u64 | `604800` | Maximum container age before forced destruction (7 days default). |
+| `blocked_mounts` | list of strings | `[]` | Host paths blocked from bind mounting into containers. |
+| `cap_add` | list of strings | `[]` | Linux capabilities to add to the container (e.g., `["NET_ADMIN"]`). Use with caution. |
+| `tmpfs` | list of strings | `["/tmp:size=64m"]` | tmpfs mounts inside the container. Each entry is `"path:options"` (e.g., `"/tmp:size=128m"`). |
+| `pids_limit` | u32 | `100` | Maximum number of processes inside the container. Prevents fork bombs. |
+
+**`mode` values:**
+
+| Value | Description |
+|-------|-------------|
+| `off` | Docker sandbox disabled (default). |
+| `non_main` | Use Docker only for non-main (sub) agents. |
+| `all` | Use Docker for all agents. |
+
+**`scope` values:**
+
+| Value | Description |
+|-------|-------------|
+| `session` | One container per session, destroyed when the session ends (default). |
+| `agent` | One container per agent, reused across sessions. |
+| `shared` | Shared container pool across all agents. |
+
+---
+
+### `[canvas]`
+
+Configures the Canvas (Agent-to-UI) tool that allows agents to render HTML in the dashboard.
+
+```toml
+[canvas]
+enabled = false
+max_html_bytes = 524288
+allowed_tags = []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the canvas tool. |
+| `max_html_bytes` | usize | `524288` | Maximum HTML payload size in bytes (512 KB default). |
+| `allowed_tags` | list of strings | `[]` | Allowed HTML tag names for sanitization. Empty = all safe tags permitted. |
+
+---
+
+### `[auto_reply]`
+
+Configures the background auto-reply engine that can automatically respond to incoming messages without waiting for human interaction.
+
+```toml
+[auto_reply]
+enabled = false
+max_concurrent = 3
+timeout_secs = 120
+suppress_patterns = ["/stop", "/pause"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the auto-reply engine. |
+| `max_concurrent` | usize | `3` | Maximum number of concurrent auto-reply tasks. |
+| `timeout_secs` | u64 | `120` | Default timeout per auto-reply task in seconds. |
+| `suppress_patterns` | list of strings | `["/stop", "/pause"]` | Incoming message patterns that suppress auto-reply. |
+
+---
+
+### `[broadcast]`
+
+Configures message broadcasting to route a single incoming message to multiple agents simultaneously.
+
+```toml
+[broadcast]
+strategy = "parallel"
+routes = { "announcement-channel" = ["agent-a", "agent-b", "agent-c"] }
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy` | string | `"parallel"` | Delivery strategy. `"parallel"` = send to all agents simultaneously; `"sequential"` = send one at a time in order. |
+| `routes` | map of string to list of strings | `{}` | Maps peer/channel identifiers to lists of agent names that receive the message. |
+
+---
+
+### `[inbox]`
+
+File-based input inbox for async external commands. Drop text files into a watched directory and they are dispatched as messages to agents. Processed files are moved to a `processed/` subdirectory to avoid redelivery.
+
+```toml
+[inbox]
+enabled = true
+directory = "~/.librefang/inbox/"
+poll_interval_secs = 5
+default_agent = "assistant"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the inbox directory watcher. |
+| `directory` | string or null | `null` | Directory to watch. Defaults to `$HOME_DIR/inbox/`. Supports `~` expansion. |
+| `poll_interval_secs` | u64 | `5` | How often (in seconds) to scan the directory for new files. Minimum 1. |
+| `default_agent` | string or null | `null` | Agent name to route files to when no `agent:` directive is found in the file. |
+
+**File format:** Plain text files (`.txt`, `.md`, `.json`, `.py`, etc.). The first line may contain an `agent:<name>` directive to target a specific agent; the rest is sent as the message body. Files without the directive use `default_agent`.
+
+**Safety limits:** Files larger than 1 MB are skipped. Binary files (non-text extensions) are skipped. Empty files are moved to `processed/` without sending.
+
+**Usage examples:**
+
+Target a specific agent:
+
+```bash
+cat > ~/.librefang/inbox/task.txt << 'EOF'
+agent:code-reviewer
+Please review this code for security issues:
+
+def login(user, password):
+    query = f"SELECT * FROM users WHERE name='{user}' AND pass='{password}'"
+    return db.execute(query)
+EOF
+```
+
+Send to the default agent:
+
+```bash
+echo "Summarize today's system logs" > ~/.librefang/inbox/summarize.txt
+```
+
+Cron job:
+
+```bash
+# crontab -e
+0 9 * * * grep ERROR /var/log/app.log > ~/.librefang/inbox/daily_errors.txt
+```
+
+CI/CD post-build:
+
+```bash
+echo "agent:devops
+Build failed, please analyze:
+$(tail -100 build.log)" > ~/.librefang/inbox/build_$(date +%s).txt
+```
+
+Batch processing:
+
+```bash
+for doc in ~/reports/*.md; do
+  cp "$doc" ~/.librefang/inbox/
+done
+```
+
+Check inbox status:
+
+```bash
+curl -s http://127.0.0.1:4545/api/inbox/status
+# {"enabled":true,"pending_count":3,"processed_count":12,...}
+```
+
+---
+
+### `[[bindings]]`
+
+Agent bindings route specific channel/account/peer combinations to specific agents. More specific bindings (more non-null fields) take priority over less specific ones.
+
+```toml
+[[bindings]]
+agent = "support-agent"
+[bindings.match_rule]
+channel = "telegram"
+guild_id = "123456"
+
+[[bindings]]
+agent = "vip-agent"
+[bindings.match_rule]
+channel = "discord"
+peer_id = "987654321"
+roles = ["premium"]
+```
+
+**Top-level fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `agent` | string | Target agent name or ID to route matched messages to. |
+| `match_rule` | object | Match criteria. All specified (non-null) fields must match. |
+
+**`match_rule` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `channel` | string or null | `null` | Channel type to match (e.g., `"discord"`, `"telegram"`, `"slack"`). |
+| `account_id` | string or null | `null` | Specific bot account ID within the channel (for multi-bot setups). |
+| `peer_id` | string or null | `null` | User/peer ID for DM routing. |
+| `guild_id` | string or null | `null` | Guild or server ID (Discord/Slack). |
+| `roles` | list of strings | `[]` | Role-based routing; user must have at least one of these roles. |
+
+**Specificity scoring** (higher = matched first): `peer_id` (+8) > `guild_id` (+4) > `roles` (+2) = `account_id` (+2) > `channel` (+1).
+
+---
+
+### `[pairing]`
+
+Configures device pairing for the LibreFang mobile companion app and push notifications.
+
+```toml
+[pairing]
+enabled = false
+max_devices = 10
+token_expiry_secs = 300
+push_provider = "ntfy"
+ntfy_url = "https://ntfy.sh"
+ntfy_topic = "my-librefang-notifications"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable device pairing. |
+| `max_devices` | usize | `10` | Maximum number of paired devices. |
+| `token_expiry_secs` | u64 | `300` | Pairing token validity in seconds (5 minutes default). |
+| `push_provider` | string | `"none"` | Push notification provider: `"none"`, `"ntfy"`, or `"gotify"`. |
+| `ntfy_url` | string or null | `null` | ntfy server URL (when `push_provider = "ntfy"`). |
+| `ntfy_topic` | string or null | `null` | ntfy topic for push notifications. |
+
+---
+
+### `[extensions]`
+
+Configures MCP server reconnection behavior and health monitoring.
+
+```toml
+[extensions]
+auto_reconnect = true
+reconnect_max_attempts = 10
+reconnect_max_backoff_secs = 300
+health_check_interval_secs = 60
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `auto_reconnect` | bool | `true` | Automatically reconnect to MCP servers when they disconnect. |
+| `reconnect_max_attempts` | u32 | `10` | Maximum reconnect attempts before giving up permanently. |
+| `reconnect_max_backoff_secs` | u64 | `300` | Maximum backoff duration in seconds between reconnect attempts. |
+| `health_check_interval_secs` | u64 | `60` | Interval in seconds between health checks for connected extensions. |
+
+---
+
+### `[vault]`
+
+Configures the encrypted credential vault for storing sensitive secrets.
+
+```toml
+[vault]
+enabled = true
+# path = "~/.librefang/vault.enc"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the credential vault. Auto-detected if `vault.enc` already exists. |
+| `path` | path or null | `null` | Custom vault file path. Defaults to `~/.librefang/vault.enc`. |
+
+---
+
+### `[webhook_triggers]`
+
+Enables external systems to trigger agent actions via authenticated HTTP webhooks at `/hooks/wake` and `/hooks/agent`.
+
+```toml
+[webhook_triggers]
+enabled = true
+token_env = "LIBREFANG_WEBHOOK_TOKEN"
+max_payload_bytes = 65536
+rate_limit_per_minute = 30
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable webhook trigger endpoints. |
+| `token_env` | string | `"LIBREFANG_WEBHOOK_TOKEN"` | Env var name holding the bearer token (NOT the token itself). Token must be ≥ 32 characters. Required when `enabled = true`. |
+| `max_payload_bytes` | usize | `65536` | Maximum incoming payload size in bytes (64 KB default). |
+| `rate_limit_per_minute` | u32 | `30` | Maximum webhook requests per minute per source IP. |
+
+---
+
+### `[proxy]`
+
+Configures HTTP proxy for all outbound connections (LLM APIs, web search, MCP servers, etc.). Environment variables `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are also respected as fallbacks.
+
+```toml
+[proxy]
+http_proxy = "http://proxy.corp.example:8080"
+https_proxy = "http://proxy.corp.example:8080"
+no_proxy = "localhost,127.0.0.1,.internal.corp"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `http_proxy` | string or null | `null` | HTTP proxy URL. Falls back to `HTTP_PROXY` / `http_proxy` env var. Credentials in URLs are redacted in logs. |
+| `https_proxy` | string or null | `null` | HTTPS proxy URL. Falls back to `HTTPS_PROXY` / `https_proxy` env var. |
+| `no_proxy` | string or null | `null` | Comma-separated list of hosts/domains that bypass the proxy. Falls back to `NO_PROXY` / `no_proxy` env var. |
+
+---
+
+
+### `[session]`
+
+Configures automatic cleanup of idle or excess sessions.
+
+```toml
+[session]
+retention_days = 30
+max_sessions_per_agent = 100
+cleanup_interval_hours = 24
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `retention_days` | u32 | `0` | Maximum age in days for idle sessions before automatic cleanup. `0` = unlimited. |
+| `max_sessions_per_agent` | u32 | `0` | Maximum number of sessions per agent (oldest pruned first). `0` = unlimited. |
+| `cleanup_interval_hours` | u32 | `24` | How often the background cleanup job runs in hours. |
+
+---
+
+### `[queue]`
+
+Configures the agent command queue, including depth limits, TTL, and per-lane concurrency.
+
+```toml
+[queue]
+max_depth_per_agent = 100
+max_depth_global = 1000
+task_ttl_secs = 3600
+
+[queue.concurrency]
+main_lane = 3
+cron_lane = 2
+subagent_lane = 3
+```
+
+**`[queue]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_depth_per_agent` | u32 | `0` | Maximum queued tasks per agent. New tasks are rejected when full. `0` = unlimited. |
+| `max_depth_global` | u32 | `0` | Maximum total queued tasks across all agents. `0` = unlimited. |
+| `task_ttl_secs` | u64 | `3600` | Unprocessed tasks expire after this many seconds. `0` = unlimited. |
+
+**`[queue.concurrency]` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `main_lane` | usize | `3` | Concurrent user message tasks. |
+| `cron_lane` | usize | `2` | Concurrent scheduled cron job tasks. |
+| `subagent_lane` | usize | `3` | Concurrent subagent invocation tasks. |
+
+---
+
+### `[tool_budget]`
+
+**Source:** `librefang-runtime/src/tool_budget.rs`
+
+The tool budget enforcer caps the size of data that tool calls can return in a single
+agent turn, preventing unexpectedly large tool outputs from filling the context window
+and driving up token costs.
+
+#### How it works
+
+Every tool result passes through a three-layer size check before being placed in the
+context:
+
+| Layer | Threshold | Behavior |
+|---|---|---|
+| **Inline** | ≤ 50 KB | Result is embedded in the context as-is. |
+| **Spill** | 50 KB – 200 KB | Result is written to a temporary file under `/tmp/librefang-results/` and replaced in the context with a short summary noting the spill path and byte count. |
+| **Truncate** | > 200 KB | Only the first 200 KB of the result is kept; the remainder is silently discarded. A `WARN` entry is emitted with the tool name and original size. |
+
+#### Spill file naming
+
+Spill files are named `<agent_id>_<tool_call_id>_<timestamp>.txt` and are written to
+`/tmp/librefang-results/`. They are not cleaned up automatically between turns; the
+directory is purged when the daemon restarts.
+
+The agent can read a spill file on a subsequent turn if needed — the summary injected
+into the context includes the full path.
+
+#### Configuration
+
+There is no per-agent configuration for the tool budget in the current release. The
+50 KB and 200 KB thresholds are fixed at compile time.
+
+#### Why these limits?
+
+50 KB of inline text is roughly 12 500 tokens — already a substantial fraction of
+most model context windows. Results beyond this point have diminishing returns for the
+agent while linearly increasing prompt cost. The 200 KB hard cap prevents a single
+runaway tool call from consuming an entire context window.
+
+---
+
+### `[context_compression]`
+
+Context compression automatically reduces the size of an agent's context window when token usage grows too large, preventing hard context-limit errors without requiring manual session management.
+
+#### How it works
+
+When an LLM call is about to be dispatched, the `ContextEngine` measures the estimated token count of the assembled context (system prompt + session history + tool schemas). If usage exceeds **80% of the model's context window**, the engine triggers a compression pass before sending the request.
+
+Compression happens automatically — there is no configuration required to enable it. The `[context_compression]` section exists for future tunability; currently all thresholds are fixed internally.
+
+#### Three-layer protection
+
+| Layer | Trigger | Mechanism |
+|-------|---------|-----------|
+| **LLM summarization** | ≥ 80% of context window | An internal LLM call condenses the oldest portion of the session history into a compact summary message. The summary is injected back into the history in place of the original turns. |
+| **Hard truncation** | Still over limit after summarization | Oldest non-system messages are removed outright until the context fits. Applied only when the summary itself is too large to help. |
+| **Context guard** | Final safety backstop | A hard-coded ceiling prevents the constructed prompt from ever exceeding the model's declared maximum. Excess tokens are truncated with a warning logged at `ERROR` level. |
+
+#### Summary retention and iterative refinement
+
+Summary messages are stored in the session history as regular `assistant` turns with a special internal tag. On subsequent compression passes, an existing summary is included in the material to be re-summarized rather than preserved verbatim. This means long-running sessions undergo iterative refinement — older summaries are folded into newer, more compact ones over time.
+
+The compactor system prompt now instructs the LLM to **write summaries in the same language the user was using** in the conversation. A Chinese conversation produces a Chinese summary; an Arabic conversation produces an Arabic summary. The instruction is applied to both the single-pass `summarize_messages` path and the merge step of `summarize_in_chunks` so chunked compaction is covered too — no surprise English-language insertions on long non-English sessions.
+
+#### Pluggable `ContextEngine`
+
+The compression algorithm is implemented behind a `ContextEngine` trait. The current implementation uses an LLM-based summarizer. Future versions of LibreFang will allow configuring alternative compression algorithms — including DAG-based compression and LCM (Latent Context Modeling) — once those implementations stabilize.
+
+#### No configuration needed
+
+Context compression is always active for all agents. There are no knobs to enable, disable, or tune in `config.toml` today. The 80% threshold, hard-truncation fallback, and context guard ceiling are all enforced automatically by the runtime.
+
+---
+
+### Cron Scheduler
+
+Per-agent scheduled jobs (interval, one-shot, or 5-field cron expressions) trigger agent turns, system events, or workflow runs. The scheduler supports multi-destination delivery with failure isolation, pre-scripts that inject data into the LLM prompt, and a silent marker for runtime delivery suppression.
+
+See [Cron Scheduler](/configuration/features/cron) for the full schema, fan-out target variants (channel / webhook / local file / email), SSRF protection on webhook URLs, the `<home_dir>/scripts/` path allowlist for pre-scripts, and the wake-gate vs pre-script trade-off.
+
+---
+
+### Observability — Tempo + business spans
+
+LibreFang ships an opt-in observability stack you can bring up with one `docker compose` invocation. It captures HTTP requests **and** LibreFang's own work — agent turns, tool calls, channel sends, cron fires — as searchable Tempo traces.
+
+**Stack components** (all bundled in-binary; no external download required):
+
+- `librefang-otel-collector` — OTLP/gRPC collector on `:4317`. The daemon exports spans here.
+- `librefang-tempo` — single-binary Grafana Tempo with local-filesystem storage and 24 h retention. Receiver on internal `:4317`, query API on `:3200`.
+- `librefang-grafana` — pre-provisioned Grafana with the Tempo data source wired.
+
+**Auto-start is opt-in.** The observability stack is **not** brought up automatically with `librefang start` — set `[telemetry] auto_start = true` in `config.toml` if you want the daemon to manage the lifecycle for you. Otherwise control it explicitly with `librefang observability up` / `down`. The bundled containers run under per-`home_dir` Docker labels so multiple LibreFang installs on the same host don't fight for the same names; teardown uses RAII-style cleanup that reaps containers even on abnormal daemon exit.
+
+**Bring it up:**
+
+```bash
+librefang observability up      # starts the bundled compose stack
+librefang observability status  # health-checks each container
+librefang observability down    # tears it down
+```
+
+**Configure the daemon to export there:**
+
+```toml
+[telemetry]
+otlp_endpoint = "http://localhost:4317"
+service_name = "librefang"
+sample_rate = 1.0           # 0.0–1.0; lower for high-volume prod
+prometheus_enabled = true   # also expose /api/metrics
+```
+
+**Trace search**: open Grafana at `http://localhost:3000`, switch Explore to the Tempo data source, and search by trace ID, span name, or attribute. Business-level spans include `agent.turn`, `tool.call`, `channel.send`, `cron.fire`, and `provider.request` — each carrying agent id, channel name, model, and outcome as searchable attributes.
+
+**`cache_hit_ratio` metric:** for every `agent.turn` span the runtime computes
+
+```
+cache_hit_ratio = cache_read / (cache_read + cache_creation)   # in [0.0, 1.0]
+```
+
+`Some(1.0)` is a perfect prefix-cache hit; `Some(0.0)` is a cold start where caching was active but nothing was hit; `None` means caching wasn't active at all for the run. Surfaces in trajectory exports (`metadata.cache_hit_ratio`) and on the Grafana per-agent panel.
+
+---
+

@@ -1,0 +1,981 @@
+# Core Configuration Reference
+
+Core configuration sections for LibreFang: top-level fields, default model, memory, networking, web search, media processing, and link understanding.
+
+---
+
+### Top-Level Fields
+
+These fields sit at the root of `config.toml` (not inside any `[section]`).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `home_dir` | path | `~/.librefang` | LibreFang home directory. Stores config, agents, skills. |
+| `data_dir` | path | `~/.librefang/data` | Directory for SQLite databases and persistent data. |
+| `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. |
+| `api_listen` | string | `"127.0.0.1:4545"` | Bind address for the HTTP/WebSocket/SSE API server. Alias: `listen_addr`. |
+| `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |
+| `api_key` | string | `""` (empty) | API authentication key. When set, all endpoints except `/api/health` require `Authorization: Bearer <key>`. Empty plus `api_listen` on a loopback address (`127.0.0.1` / `::1` / `localhost`) means **unauthenticated localhost only** — non-loopback callers are rejected by the auth layer regardless. To accept unauthenticated traffic from non-loopback clients you must explicitly set the listen address and accept the risk; the empty-key + non-loopback bypass that previously existed has been closed. |
+| `cors_origin` | list of strings | `[]` | CORS allowed origins added to the allow list (in addition to localhost). E.g., `["https://dash.example.com"]`. |
+| `trusted_proxies` | list of strings | `[]` | CIDRs (or single IPs) of reverse proxies trusted to set forwarding headers (`X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `Forwarded`). Used together with `trust_forwarded_for`: header-based client-IP resolution is only applied when the TCP peer matches one of these entries. Empty (default) disables header trust regardless of the master switch. Entries: `"172.19.0.0/16"`, `"10.0.0.0/8"`, `"2001:db8::/32"`, `"127.0.0.1"`, `"::1"`. Without this allowlist, trusting forwarding headers would let any internet client forge a per-request source IP and defeat per-IP rate limits and the WS connection cap. |
+| `trust_forwarded_for` | bool | `false` | Master switch for forwarding-header trust. When `true` AND the TCP peer matches `trusted_proxies`, the daemon resolves the real client IP from forwarding headers (preference: `CF-Connecting-IP` → `X-Real-IP` → `Forwarded` (RFC 7239) → rightmost-untrusted hop in `X-Forwarded-For`). Used by the GCRA rate limiter, the auth-login rate limiter, and the per-IP WebSocket connection cap. With either this flag off or `trusted_proxies` empty, the TCP peer is used everywhere — the safe default for any non-proxied deployment. |
+| `mode` | string | `"default"` | Kernel operating mode. See below. |
+| `language` | string | `"en"` | Language/locale code for CLI output and system messages. |
+| `usage_footer` | string | `"full"` | Controls usage info appended to responses. See below. |
+| `prompt_caching` | bool | `true` | Enable LLM provider prompt caching. Adds cache hints to system prompts (Anthropic: `cache_control`, OpenAI: automatic prefix caching). |
+| `stable_prefix_mode` | bool | `false` | When enabled, avoids volatile system-prompt additions (recalled memory, canonical context) that change every turn, improving provider-side prompt cache hit rates. |
+| `max_cron_jobs` | usize | `500` | Global maximum number of cron jobs across all agents. |
+| `workspaces_dir` | path or null | `null` | Root directory for agent workspaces. Defaults to `~/.librefang/workspaces`. Contains agent working directories and the `hands/` subdirectory for user custom hands. |
+| `include` | list of strings | `[]` | Config file includes (relative paths). See [Config Include Mechanism](#config-include-mechanism). |
+| `provider_urls` | map of string→string | `{}` | Provider base URL overrides. Maps provider ID to custom base URL (e.g., `ollama = "http://192.168.1.100:11434/v1"`). Useful for self-hosted or proxied endpoints. |
+| `provider_api_keys` | map of string→string | `{}` | Provider API key env var overrides. Maps provider ID to the name of an environment variable holding the key (e.g., `nvidia = "NVIDIA_API_KEY"`). When not set for a provider, the convention `{PROVIDER_UPPER}_API_KEY` is used. |
+| `provider_regions` | map of string→string | `{}` | Provider region selection. Maps provider ID to a region name defined in the provider's registry TOML (e.g., `qwen = "intl"`). Overrides the provider's base URL and optionally its API key env var. Applied before `provider_urls` (lower priority). |
+| `max_history_messages` | usize or null | `null` | Operator override for the per-agent message-history trim cap. `null` = use the compiled-in default (`40`). See [`max_history_messages`](#max_history_messages) below. |
+
+**`mode` values:**
+
+| Value | Behavior |
+|-------|----------|
+| `stable` | Conservative: no auto-updates, pinned models, frozen skill registry. Uses `FallbackDriver`. |
+| `default` | Balanced: standard operation. |
+| `dev` | Developer: experimental features enabled. |
+
+**`usage_footer` values:**
+
+| Value | Behavior |
+|-------|----------|
+| `off` | No usage information shown. |
+| `tokens` | Show token counts only. |
+| `cost` | Show estimated cost only. |
+| `full` | Show both token counts and estimated cost (default). |
+
+---
+
+### `[default_model]`
+
+Configures the primary LLM provider used when agents do not specify their own model.
+
+```toml
+[default_model]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_env = "ANTHROPIC_API_KEY"
+# base_url = "https://api.anthropic.com"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `"anthropic"` | Provider name. Supported: `anthropic`, `gemini`, `openai`, `groq`, `openrouter`, `deepseek`, `together`, `mistral`, `fireworks`, `ollama`, `vllm`, `lmstudio`, `perplexity`, `cohere`, `ai21`, `cerebras`, `sambanova`, `huggingface`, `xai`, `replicate`. |
+| `model` | string | `"claude-sonnet-4-20250514"` | Model identifier. Aliases like `sonnet`, `haiku`, `gpt-4o`, `gemini-flash` are resolved by the model catalog. |
+| `api_key_env` | string | `"ANTHROPIC_API_KEY"` | Name of the environment variable holding the API key. The actual key is read from this env var at runtime, never stored in config. |
+| `base_url` | string or null | `null` | Override the API base URL. Useful for proxies or self-hosted endpoints. When `null`, the provider's default URL from the model catalog is used. |
+
+---
+
+### `[memory]`
+
+Configures the SQLite-backed memory substrate, including vector embeddings and memory decay.
+
+```toml
+[memory]
+# sqlite_path = "/custom/path/librefang.db"
+embedding_model = "all-MiniLM-L6-v2"
+consolidation_threshold = 10000
+decay_rate = 0.1
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sqlite_path` | path or null | `null` | Explicit path to the SQLite database file. When `null`, defaults to `{data_dir}/librefang.db`. |
+| `embedding_model` | string | `"all-MiniLM-L6-v2"` | Model name used for generating vector embeddings for semantic memory search. |
+| `embedding_provider` | string or null | `null` | Embedding provider (e.g., `"openai"`, `"ollama"`). Auto-detected if `null`. |
+| `embedding_api_key_env` | string or null | `null` | Environment variable name holding the API key for the embedding provider. |
+| `consolidation_threshold` | u64 | `10000` | Number of stored memories before automatic consolidation is triggered to merge and prune old entries. |
+| `consolidation_interval_hours` | u64 | `24` | How often memory consolidation runs (hours). `0` = disabled. |
+| `decay_rate` | f32 | `0.1` | Memory confidence decay rate. `0.0` = no decay (memories never fade), `1.0` = aggressive decay. Values between 0.0 and 1.0. |
+
+---
+
+### `[auto_dream]`
+
+Background memory consolidation ("dreams") — asks opt-in agents to reflect on and consolidate their own memory via a 4-phase prompt (Orient / Gather / Consolidate / Prune). Dreams are triggered **event-driven** (the moment an agent finishes a turn the kernel checks whether its gates are open); a sparse backstop scheduler catches opted-in agents that go long periods without taking a turn. Disabled by default; individual agents still opt in via `auto_dream_enabled = true` on their manifest.
+
+```toml
+[auto_dream]
+enabled = false
+min_hours = 24
+min_sessions = 5
+check_interval_secs = 86400
+timeout_secs = 600
+# lock_dir = ""   # defaults to <data_dir>/auto_dream/
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master toggle. When `false`, no dream fires regardless of per-agent opt-in. |
+| `min_hours` | f64 | `24.0` | Minimum hours since that agent's last consolidation before the next one fires. |
+| `min_sessions` | u32 | `5` | Minimum sessions touched since that agent's last consolidation before the next one fires. Set to `0` to disable the session-count gate. |
+| `check_interval_secs` | u64 | `86400` | How often the *backstop* scheduler wakes up, in seconds. The primary trigger is the `AgentLoopEnd` hook that fires on every turn end; this value only controls the fallback cadence for agents that never turn. |
+| `timeout_secs` | u64 | `600` | Timeout for a single dream invocation in seconds. |
+| `lock_dir` | string | `""` | Optional override for the lock directory. Empty = `<data_dir>/auto_dream/`. Per-agent locks are stored as `<dir>/<agent_id>.lock`. |
+
+A dream fires for an agent when all gates hold: `enabled = true`, the agent's manifest has `auto_dream_enabled = true`, `min_hours` have elapsed since its last dream, `min_sessions` have been touched since then, and the per-agent lock can be acquired.
+
+**Per-agent opt-in** can be toggled at runtime without restarting the agent:
+
+- **Web dashboard**: Settings → Auto-Dream card → checkbox next to each agent.
+- **API**: `PUT /api/auto-dream/agents/{id}/enabled` with body `{"enabled": true | false}`. The new state takes effect at the next turn end (event-driven) or the next backstop tick, whichever comes first.
+- **Manifest**: set `auto_dream_enabled = true` in the agent's `.toml` for a persistent opt-in that survives restarts.
+
+**Per-agent threshold overrides** (optional) let you tune the schedule heterogeneously. Set either field on the agent's manifest to override the global `[auto_dream]` default — `None` (the default) inherits the global:
+
+```toml
+auto_dream_enabled = true
+auto_dream_min_hours = 168    # weekly, for quiet agents
+auto_dream_min_sessions = 1   # fire after every session, for chatty ones
+```
+
+The status endpoint returns the resolved `effective_min_hours` / `effective_min_sessions` per agent so the dashboard can show what is actually in force.
+
+**Runtime tool restriction**: inside a dream, the kernel clamps the tool allowlist to `memory_store` / `memory_recall` / `memory_list` only, regardless of what the agent's manifest normally permits. This is defence-in-depth against prompt-injected dreams calling shell or network-mutating tools.
+
+**Manual controls**: `POST /api/auto-dream/agents/{id}/trigger` bypasses the time and session gates but still respects the lock and the opt-in flag. `POST /api/auto-dream/agents/{id}/abort` cancels an in-flight manual dream and rolls the lock mtime back so the time gate reopens. `GET /api/auto-dream/status` returns live progress, including token usage and cost for completed dreams.
+
+**Audit trail**: every dream lifecycle transition (start / complete / fail / abort) is recorded as a `DreamConsolidation` audit event. The completion entry carries input/output/cache token counts and `cost_usd` so spend is answerable from `/api/audit`.
+
+---
+
+### `[network]`
+
+Configures the OFP (LibreFang Protocol) peer-to-peer networking layer. Authentication has two layers: a `shared_secret` HMAC admission gate plus per-node Ed25519 identity with TOFU pinning (#3873). The Ed25519 keypair and trust pins live in `<data_dir>/peer_keypair.json` and `<data_dir>/trusted_peers.json`.
+
+```toml
+[network]
+listen_addresses = ["/ip4/0.0.0.0/tcp/0"]
+bootstrap_peers = []
+mdns_enabled = true
+max_peers = 50
+shared_secret = "my-cluster-secret"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `listen_addresses` | list of strings | `["/ip4/0.0.0.0/tcp/0"]` | libp2p multiaddresses to listen on. Port `0` means auto-assign. |
+| `bootstrap_peers` | list of strings | `[]` | Multiaddresses of bootstrap peers for DHT discovery. |
+| `mdns_enabled` | bool | `true` | Enable mDNS for automatic local network peer discovery. |
+| `max_peers` | u32 | `50` | Maximum number of simultaneously connected peers. |
+| `shared_secret` | string | `""` (empty) | Pre-shared admission secret for OFP HMAC-SHA256. **Required** when `network_enabled = true`. Both sides must use the same value. Acts as a coarse "cluster password" gate; per-node identity is provided separately by the Ed25519 keypair persisted in the data dir, so a leaked `shared_secret` cannot impersonate a previously-pinned peer. Redacted in logs. |
+
+---
+
+### `[web]`
+
+Configures web search and web fetch capabilities used by agent tools.
+
+```toml
+[web]
+search_provider = "auto"
+cache_ttl_minutes = 15
+timeout_secs = 15
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `search_provider` | string | `"auto"` | Which search engine to use. See values below. |
+| `cache_ttl_minutes` | u64 | `15` | Cache duration for search/fetch results in minutes. `0` = caching disabled. |
+| `timeout_secs` | u64 | `15` | HTTP timeout in seconds for all web search requests. Recommended: 15 for most providers, 30+ for Jina. |
+
+**`search_provider` values:**
+
+| Value | Description |
+|-------|-------------|
+| `auto` | Cascading fallback: tries Tavily, then Brave, then Jina, then Perplexity, then SearXNG (if `web.searxng.url` is set), then DuckDuckGo, based on which API keys / URLs are available. |
+| `brave` | Brave Search API. Requires `BRAVE_API_KEY`. |
+| `jina` | Jina AI search and grounding. Requires `JINA_API_KEY`. |
+| `tavily` | Tavily AI-native search. Requires `TAVILY_API_KEY`. |
+| `perplexity` | Perplexity AI search. Requires `PERPLEXITY_API_KEY`. |
+| `searxng` | Self-hosted SearXNG instance. Requires `web.searxng.url`. No API key. |
+| `duckduckgo` | DuckDuckGo HTML scraping. No API key needed. |
+
+#### `[web.brave]`
+
+```toml
+[web.brave]
+api_key_env = "BRAVE_API_KEY"
+max_results = 5
+country = ""
+search_lang = ""
+freshness = ""
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"BRAVE_API_KEY"` | Environment variable name holding the Brave Search API key. |
+| `max_results` | usize | `5` | Maximum number of search results to return. |
+| `country` | string | `""` | Country code for localized results (e.g., `"US"`, `"GB"`). Empty = no filter. |
+| `search_lang` | string | `""` | Language code (e.g., `"en"`, `"fr"`). Empty = no filter. |
+| `freshness` | string | `""` | Freshness filter. `"pd"` = past day, `"pw"` = past week, `"pm"` = past month. Empty = no filter. |
+
+#### `[web.tavily]`
+
+```toml
+[web.tavily]
+api_key_env = "TAVILY_API_KEY"
+search_depth = "basic"
+max_results = 5
+include_answer = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"TAVILY_API_KEY"` | Environment variable name holding the Tavily API key. |
+| `search_depth` | string | `"basic"` | Search depth: `"basic"` for fast results, `"advanced"` for deeper analysis. |
+| `max_results` | usize | `5` | Maximum number of search results to return. |
+| `include_answer` | bool | `true` | Whether to include Tavily's AI-generated answer summary in results. |
+
+#### `[web.jina]`
+
+```toml
+[web.jina]
+api_key_env = "JINA_API_KEY"
+max_results = 5
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"JINA_API_KEY"` | Environment variable name holding the Jina AI API key. |
+| `max_results` | usize | `5` | Maximum number of search results to return. |
+
+#### `[web.perplexity]`
+
+```toml
+[web.perplexity]
+api_key_env = "PERPLEXITY_API_KEY"
+model = "sonar"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key_env` | string | `"PERPLEXITY_API_KEY"` | Environment variable name holding the Perplexity API key. |
+| `model` | string | `"sonar"` | Perplexity model to use for search queries. |
+
+#### `[web.searxng]`
+
+Self-hosted SearXNG provider. Disabled by default — set `url` to opt in. No API key is required; LibreFang talks to the instance over the public `/search?format=json` endpoint and discovers categories via `/config`.
+
+```toml
+[web.searxng]
+url = "https://search.example.com"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | `""` | Base URL of the SearXNG instance. Empty disables the provider. Trailing slashes are tolerated. |
+
+**Notes:**
+- Categories are validated dynamically against the instance's `/config` endpoint and cached for 5 minutes; an invalid category surfaces the available list back to the agent.
+- Pagination uses SearXNG's 1-indexed `pageno` query param (`pageno=0` is rejected up front).
+- Public SearXNG instances reject the `limit` parameter, so `max_results` is enforced client-side after fetching.
+- Results returned to the LLM are filtered to `title` / `url` / `content` / `published_date` only — engine-level scoring noise is stripped.
+- When `search_provider = "auto"`, SearXNG only runs if `url` is non-empty; otherwise the cascade skips it.
+
+#### `[web.fetch]`
+
+```toml
+[web.fetch]
+max_chars = 50000
+max_response_bytes = 10485760
+timeout_secs = 30
+readability = true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_chars` | usize | `50000` | Maximum characters returned in fetched content. Content exceeding this is truncated. |
+| `max_response_bytes` | usize | `10485760` (10 MB) | Maximum HTTP response body size in bytes. |
+| `timeout_secs` | u64 | `30` | HTTP request timeout in seconds. |
+| `readability` | bool | `true` | Enable HTML-to-Markdown readability extraction. When true, fetched HTML is converted to clean Markdown. |
+
+---
+
+### `[media]`
+
+Configures media understanding (image description, audio transcription, video description) for messages that include attachments.
+
+```toml
+[media]
+image_description = true
+audio_transcription = true
+video_description = false
+max_concurrency = 2
+# image_provider = "openai"   # auto-detect if omitted
+# audio_provider = "openai"   # auto-detect if omitted
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `image_description` | bool | `true` | Enable automatic image description for incoming image attachments. |
+| `audio_transcription` | bool | `true` | Enable automatic audio transcription for incoming audio attachments. |
+| `video_description` | bool | `false` | Enable video description. Disabled by default (expensive and slow). |
+| `max_concurrency` | usize | `2` | Maximum number of concurrent media processing tasks. |
+| `image_provider` | string or null | `null` | Preferred provider for image description. Auto-detected from available providers if `null`. |
+| `audio_provider` | string or null | `null` | Preferred provider for audio transcription. Auto-detected from available providers if `null`. |
+
+---
+
+### `[links]`
+
+Configures automatic link understanding — fetching and summarizing URLs found in incoming messages.
+
+```toml
+[links]
+enabled = false
+max_links = 3
+max_content_bytes = 102400
+timeout_secs = 10
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable automatic link understanding. When `true`, URLs in messages are fetched and their content is summarized before the agent processes the message. |
+| `max_links` | usize | `3` | Maximum number of links to process per message. Additional links are ignored. |
+| `max_content_bytes` | usize | `102400` (100 KB) | Maximum content size to fetch per link in bytes. Content exceeding this is truncated. |
+| `timeout_secs` | u64 | `10` | Per-link fetch timeout in seconds. |
+
+---
+
+### `[parallel_tools]`
+
+Controls the agent loop's batch tool dispatcher — when a single assistant turn emits multiple tool calls, the dispatcher classifies each by parallel-safety and decides which can run concurrently and which must serialise.
+
+```toml
+[parallel_tools]
+enabled = false
+max_concurrent = 4
+mcp_default_safety = "write_shared"
+mcp_readonly_allowlist = ["mcp__github__list_issues", "mcp__notion__query_database"]
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master switch. When `false`, every tool call in a batch runs strictly sequentially. Turn this on to opt into parallel dispatch. |
+| `max_concurrent` | u32 | `4` | Cap on concurrent tool calls within a single bucket. `0` = uncapped (use the bucket size). |
+| `mcp_default_safety` | string | `"write_shared"` | Default `ParallelSafety` class assigned to MCP tools whose servers don't carry `readOnlyHint` annotations. Accepted values: `"read_only"` or `"write_shared"`. The conservative `"write_shared"` default keeps unannotated MCP tools serialised one-per-bucket rather than optimistically parallelising them. |
+| `mcp_readonly_allowlist` | list of strings | `[]` | Explicit allowlist of MCP tool names to treat as `ReadOnly` regardless of `mcp_default_safety`. Names match the fully-namespaced form `mcp__<server>__<tool>`. |
+
+**ParallelSafety classes.** Every tool call is classified into one of four classes (computed from built-in heuristics, the tool's input-schema annotations, or the MCP knobs above):
+
+| Class | Behaviour |
+|-------|-----------|
+| `read_only` | No observable side effects on shared state. Safe to run alongside any peer in the same batch. |
+| `write_scoped` | Mutates shared state but the mutation is scoped to a path or namespace projectable from the call's input (e.g. `file_write`, `apply_patch`). Safe to run with peers whose scope does not overlap; the dispatcher checks. |
+| `write_shared` | Mutates shared state with no clean scope projection (e.g. `shell_exec`). Must run as the only call in its bucket — peers run before or after, never concurrently with it. |
+| `exclusive` | Requires user interaction or has cross-cutting effects (approval flows, control-plane mutations). Forces the entire batch to serialise. |
+
+**Tool authors can pin a class** by adding `"x-parallel-safety": "<snake_case>"` at the top level of a tool's input schema, or `"metadata": { "parallel_safety": "<snake_case>" }`. Unknown values fall through to the heuristic, so a typo never poisons the result.
+
+**When to tune which knob.**
+
+- **Leave `enabled = false`** if you want behaviour identical to historical sequential dispatch — useful while validating a new fleet of agents or while debugging tool-ordering issues.
+- **Lower `max_concurrent`** if your environment is rate-limit-sensitive (small MCP servers, low API quotas). `4` is a balanced default; raise it for read-heavy workloads against fast back-ends.
+- **Promote `mcp_default_safety` to `"read_only"`** only if every MCP server you connect is genuinely read-only or carries proper annotations. The default `"write_shared"` is the safe choice — unannotated MCP servers that quietly mutate state will not race.
+- **Use `mcp_readonly_allowlist`** to whitelist specific safe tools from a server whose other tools mutate state. This is the surgical alternative to flipping `mcp_default_safety`.
+- **Disable batch dispatch** (`enabled = false`) if you observe race-condition symptoms in a custom MCP server — wrong cache hits, conflicting writes, partial-state reads. File a fix or add the offending tool to a tighter classification, then re-enable.
+
+---
+
+### `max_history_messages`
+
+LibreFang trims an agent's stored conversation history at every turn so it does not grow without bound. The cap controls how many messages survive each trim. The mechanism cuts only at safe turn boundaries (never inside a `tool_use`/`tool_result` pair), so the surviving slice is always well-formed for strict providers like Gemini.
+
+The cap is configurable at two levels — a top-level field in `config.toml` (operator-wide override) and a top-level field in `agent.toml` (per-agent override). Both are optional.
+
+**Resolution order** (first match wins):
+
+1. **Per-agent override** — `max_history_messages` in `agent.toml` (top-level, not inside any section).
+2. **Global override** — `max_history_messages` at the top of `config.toml`.
+3. **Compiled-in default** — `DEFAULT_MAX_HISTORY_MESSAGES = 40`.
+
+Values below `MIN_HISTORY_MESSAGES = 4` are silently clamped up to `4` at runtime with a `warn!` log carrying `agent`, `requested`, and `applied`. Justification: a single tool-use round trip is 4 messages (user → assistant `tool_use` → `tool_result` → assistant text); caps below 4 defeat the safe-trim heuristic.
+
+**Global override** in `~/.librefang/config.toml`:
+
+```toml
+# Lower the default for every agent that does not override it itself.
+max_history_messages = 20
+```
+
+**Per-agent override** in any `agent.toml` (top-level field — sits next to `name`, `module`, etc., NOT inside `[model]` or `[autonomous]`):
+
+```toml
+name = "fast-loop"
+module = "builtin:chat"
+max_history_messages = 12
+```
+
+**When to tune.**
+
+- **Lower the cap** (e.g. `20` or `12`) for chatty agents driven by cron pings or short-message channels — each turn ships less history, so per-turn token cost drops.
+- **Raise the cap** (e.g. `80` or `120`) for long-horizon autonomous agents on long-context models, where richer history improves grounding.
+- **Leave it unset** (`null` / omitted) on most agents — the `40` default is tuned for typical chat workloads.
+
+**Interaction with the token-count cap.** This is a *message-count* cap. There is also an independent *token-count* cap (`DEFAULT_CONTEXT_WINDOW = 200000`) — whichever fires first wins. Many short messages → the message-count cap fires first; few long messages (large tool outputs) → the token cap fires first.
+
+For deeper detail (what gets trimmed, the safe-trim algorithm, where the value flows through the runtime), see the architecture note at `docs/architecture/message-history-trimming.md`.
+
+---
+
+### `[provider_request_timeout_secs]`
+
+Per-provider HTTP request timeout for LLM driver calls. Without an entry, the driver uses its built-in default (typically 60 s for the OpenAI-compatible driver, longer for Ollama).
+
+```toml
+[provider_request_timeout_secs]
+ollama = 300        # local model loading + first-token cold start
+anthropic = 120
+openai = 90
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| (provider id) → `u64` | map | `{}` | Per-provider total request timeout in seconds. Applies to both `complete()` and `stream()` paths. The driver cache key includes the timeout so changing it triggers fresh client construction (no cross-timeout cache hits). |
+
+Per-model overrides are also possible at the agent level via `agent.toml: model.request_timeout_secs` for fine-grained tuning of slow long-context models.
+
+---
+
+### `[browser]`
+
+Browser tool configuration. By default LibreFang launches a local Chromium instance. Set `cdp_endpoint` to attach to an already-running browser (Browserless, headful Chrome with `--remote-debugging-port`, etc.) instead.
+
+```toml
+[browser]
+# Default: spawn a local headless Chromium per session
+# Set cdp_endpoint to attach to a remote / pre-launched browser instead
+cdp_endpoint = "http://browser-host:9222"
+cdp_auth_token_env = "LIBREFANG_CDP_TOKEN"   # optional bearer token env var
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cdp_endpoint` | string \| null | `null` | When set, attach via CDP instead of spawning. Accepted: `http[s]://host:port`, `ws[s]://host:port`, `ws[s]://host:port/devtools/browser/<id>`. The HTTP form discovers a page via `/json/list`. |
+| `cdp_auth_token_env` | string \| null | `null` | Env-var name holding a bearer token (Browserless and similar). Token is sent as `Authorization: Bearer <token>`. |
+
+In attach mode the existing local-launch path is completely bypassed; `Drop` does not terminate the external browser.
+
+---
+
+### Cron session size limits
+
+When cron jobs share a persistent session (the default — `session_mode = "persistent"`), that session's history grows with each fire. Two optional caps prune the oldest messages from the front before each fire so the session does not balloon.
+
+```toml
+[kernel]
+cron_session_max_tokens = 50000
+cron_session_max_messages = 100
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cron_session_max_tokens` | u64 \| null | `null` | Hard cap on estimated tokens (via `librefang_runtime::compactor::estimate_token_count`). `null` = uncapped. |
+| `cron_session_max_messages` | u64 \| null | `null` | Hard cap on message count. `null` = uncapped. |
+
+Pruning is **skipped** when `session_mode = "new"` — those fires always start fresh and never carry stale state. Both caps apply jointly (whichever fires first prunes more).
+
+---
+
+### `[rate_limit]`
+
+API and WebSocket rate-limiting knobs. The HTTP path uses a GCRA token bucket per IP; WebSocket paths add an idle timeout and a per-message debounce so streaming UIs don't hammer downstream consumers.
+
+```toml
+[rate_limit]
+api_requests_per_minute = 500
+retry_after_secs = 60
+max_ws_per_ip = 5
+ws_messages_per_minute = 10
+ws_terminal_messages_per_minute = 3600
+ws_idle_timeout_secs = 1800
+ws_debounce_ms = 100
+ws_debounce_chars = 200
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `api_requests_per_minute` | u32 | `500` | HTTP token budget per IP per minute (GCRA). |
+| `retry_after_secs` | u64 | `60` | Value sent in `Retry-After` when 429. |
+| `max_ws_per_ip` | usize | `5` | Concurrent WebSocket connections allowed per IP. |
+| `ws_messages_per_minute` | u32 | `10` | Chat WS messages per connection per minute. |
+| `ws_terminal_messages_per_minute` | u32 | `3600` | Per-keystroke budget for terminal WS sessions (60/sec ≈ 720 WPM). |
+| `ws_idle_timeout_secs` | u64 | `1800` | Auto-close after N seconds of inactivity. |
+| `ws_debounce_ms` | u64 | `100` | Coalesce text deltas for this many ms before flushing to clients. |
+| `ws_debounce_chars` | usize | `200` | Force-flush the buffer when it reaches this character count. |
+
+The terminal limit is two orders of magnitude higher than the chat limit for a reason: chat `ws_messages_per_minute = 10` would exhaust the budget on a single `vim` + `:wq` keystroke flurry. Don't lower `ws_terminal_messages_per_minute` below ~600 unless you actively want to throttle interactive PTYs.
+
+---
+
+### `[sanitize]`
+
+Inbound message sanitisation / prompt-injection detection. Off by default — when on, oversized or pattern-matching inbound text is blocked or warned before reaching the LLM.
+
+```toml
+[sanitize]
+mode = "off"            # "off" | "warn" | "block"
+max_message_length = 32768
+custom_block_patterns = [
+  "(?i)ignore previous instructions",
+]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mode` | enum | `"off"` | `"off"` = pass through; `"warn"` = log but accept; `"block"` = reject. |
+| `max_message_length` | usize | `32768` | Hard cap on inbound message bytes. |
+| `custom_block_patterns` | `Vec<string>` | `[]` | Regexes added on top of the built-in prompt-injection patterns. |
+
+In `block` mode the channel adapter responds with a sanitiser-rejection notice and zero LLM tokens are spent. Pair with `[privacy]` for a defence-in-depth setup.
+
+---
+
+### `[privacy]`
+
+PII redaction or pseudonymisation applied to LLM prompts. Off by default. The redactor runs on every outbound prompt, including history replays.
+
+```toml
+[privacy]
+mode = "off"            # "off" | "redact" | "pseudonymize"
+redact_patterns = [
+  "\\b[A-Z]{2}\\d{6,8}\\b",   # add custom patterns on top of built-ins
+]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mode` | enum | `"off"` | `"redact"` replaces matches with `[REDACTED]`; `"pseudonymize"` substitutes deterministic tokens (same input → same fake) so the LLM can still reason about identity. |
+| `redact_patterns` | `Vec<string>` | `[]` | Extra regexes added to the built-in PII set (emails, phones, credit cards, IPs). |
+
+`pseudonymize` keeps a per-process mapping in memory only — restarting the daemon resets the substitution table.
+
+---
+
+### `[telemetry]`
+
+OpenTelemetry tracing + Prometheus metrics. The bundled Tempo/Grafana stack reads from these endpoints; external collectors work too — just point `otlp_endpoint` at them.
+
+```toml
+[telemetry]
+enabled = true
+otlp_endpoint = "http://localhost:4317"
+service_name = "librefang"
+sample_rate = 1.0
+prometheus_enabled = true
+auto_start_observability_stack = false
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Master switch for OTLP trace export. |
+| `otlp_endpoint` | string | `"http://localhost:4317"` | gRPC endpoint of an OTel collector. |
+| `service_name` | string | `"librefang"` | Reported as `service.name` resource attribute. |
+| `sample_rate` | f64 | `1.0` | 0.0 to 1.0 — fraction of traces sampled. |
+| `prometheus_enabled` | bool | `true` | Expose `/api/metrics` for scraping. |
+| `auto_start_observability_stack` | bool | `false` | If `true`, `librefang start` spins up the bundled Grafana/Prometheus/Tempo Docker stack. Off by default — most operators don't want four extra containers as a side-effect of starting the daemon. |
+
+---
+
+### `[heartbeat]`
+
+Heartbeat monitor for autonomous (always-on) agents. The monitor flags an agent as unresponsive when it hasn't heartbeated within `default_timeout_secs`.
+
+```toml
+[heartbeat]
+check_interval_secs = 30
+default_timeout_secs = 60
+keep_recent = 10
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `check_interval_secs` | u64 | `30` | How often the heartbeat sweep runs. |
+| `default_timeout_secs` | u64 | `60` | An agent is considered unresponsive after this many seconds without a heartbeat. |
+| `keep_recent` | usize | `10` | When pruning session context, keep this many recent heartbeat turns. |
+
+The heartbeat path also short-circuits crash-loop prevention — an agent that emits the same error N times in a row is paused with `auth_status: "crashed"` rather than retried indefinitely.
+
+---
+
+### `[compaction]`
+
+LLM-based history summarisation. When a session crosses either the message-count threshold or the token-ratio threshold, the daemon spawns a background turn that summarises the older half of the history in the user's conversation language and replaces it with the summary plus the most recent N turns.
+
+```toml
+[compaction]
+threshold_messages = 30
+keep_recent = 10
+max_summary_tokens = 1024
+token_threshold_ratio = 0.7
+max_chunk_chars = 80000
+max_retries = 3
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `threshold_messages` | usize | `30` | Trigger when the history reaches this many messages. |
+| `keep_recent` | usize | `10` | Preserve this many recent messages verbatim across the boundary. |
+| `max_summary_tokens` | usize | `1024` | Cap on the summary's output tokens. |
+| `token_threshold_ratio` | f64 | `0.7` | Also trigger when estimated tokens exceed this fraction of the model's context window. |
+| `max_chunk_chars` | usize | `80000` | When the summarisation prompt itself overflows, split into chunks of this size. |
+| `max_retries` | u32 | `3` | Retries on summariser LLM failures before giving up and skipping this round. |
+
+Per-agent overrides: `max_history_messages` in `agent.toml` clamps the trim cap for that agent. Compaction kicks in earlier if you set it lower than the global default.
+
+---
+
+### `[tool_invoke]`
+
+Direct tool-invocation REST endpoint allowlist (see `POST /api/tools/{name}/invoke`). Locked down by default — every request returns 403 unless both fields are populated.
+
+```toml
+[tool_invoke]
+enabled = true
+allowlist = ["web_search", "web_fetch", "file_read"]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch — `false` rejects every call, regardless of allowlist. |
+| `allowlist` | `Vec<string>` | `[]` | Glob patterns of tool names callers may invoke (`web_*`, `file_*`, `mcp__github__*`, etc.). Empty list denies all. |
+
+Glob semantics match agent capability grants — `*` is the wildcard. Use this for narrow integrations (a CI worker calling `web_fetch` directly), not for general client API access.
+
+---
+
+### `[parallel_tools]` (extended)
+
+The agent-loop's parallel tool dispatcher (introduced in the catchup wave). Off by default — the runtime still serialises tool calls until the dispatcher rolls out fully.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. |
+| `max_concurrent` | u32 | `4` | Concurrency cap per bucket (`0` = uncapped). |
+| `mcp_default_safety` | string | `"write_shared"` | Default safety class for unannotated MCP tools — `"read_only"` or `"write_shared"`. |
+| `mcp_readonly_allowlist` | `Vec<string>` | `[]` | Fully-namespaced MCP tool names (`mcp__server__name`) to treat as read-only regardless of `mcp_default_safety`. |
+
+`write_shared` keeps unannotated MCP tools strictly serialised, which is the safe default. Only flip individual servers to `read_only` after auditing them.
+
+---
+
+### Resource Limits & Boundaries (top-level)
+
+Global safety nets that cap inbound payload sizes and inter-agent recursion depth. All have built-in defaults — override only when you know what you're doing.
+
+```toml
+[kernel]
+max_upload_size_bytes      = 10485760     # 10 MiB
+max_request_body_bytes     = 16777216     # 16 MiB
+max_concurrent_bg_llm      = 8
+max_agent_call_depth       = 5
+local_probe_interval_secs  = 60
+strict_config              = false
+update_channel             = "stable"     # "stable" | "beta" | "rc"
+trusted_hosts              = []
+trusted_manifest_signers   = []
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_upload_size_bytes` | usize | `10485760` (10 MiB) | Cap on a single uploaded file. |
+| `max_request_body_bytes` | usize | `16777216` (16 MiB) | Cap on the entire HTTP request body. |
+| `max_concurrent_bg_llm` | usize | `8` | Concurrent background LLM calls (compaction, summarise, dream, …). |
+| `max_agent_call_depth` | u32 | `5` | Inter-agent call depth (prevents recursion bombs across `agent_send`). |
+| `local_probe_interval_secs` | u64 | `60` | How often local providers (Ollama / vLLM / LM Studio) are re-probed. |
+| `strict_config` | bool | `false` | When `true`, unknown config fields cause boot to fail (otherwise log a warning and continue). |
+| `update_channel` | enum | `"stable"` | Which release channel `librefang upgrade` consults. |
+| `trusted_hosts` | `Vec<string>` | `[]` | Hostnames allowed to drive OAuth `redirect_uri` in MCP auth flows. Defence against open-redirect against your dashboard. |
+| `trusted_manifest_signers` | `Vec<string>` | `[]` | Ed25519 public keys allowed to sign agent manifests. Manifests not signed by one of these keys are rejected when the security mode requires signature verification. |
+
+---
+
+### Background autonomous-loop executor
+
+Tunes the rate-limit circuit breaker that stops a continuous / periodic background loop from re-firing forever when the LLM provider is rate-limited or quota-exhausted (issue #5168). A single non-rate-limited tick resets the counter, so transient blips never permanently park a healthy agent.
+
+```toml
+[background]
+max_consecutive_rate_limits = 5
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_consecutive_rate_limits` | u32 | `5` | Consecutive rate-limited ticks before the loop self-terminates. `0` disables the breaker entirely (loop re-fires forever — only safe against a provider with no quota). |
+
+---
+
+### Dashboard authentication (top-level)
+
+Reach the dashboard from a non-loopback address? Set a username/password and LibreFang will hash the password to Argon2id automatically on first boot.
+
+```toml
+[kernel]
+dashboard_user = "admin"
+dashboard_pass = "vault:DASHBOARD_PASS"   # or plain string, or env var
+# dashboard_pass_hash is auto-populated; do NOT set by hand
+require_auth_for_reads = true
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dashboard_user` | string | `""` | Username. Empty disables dashboard auth (only use on loopback). |
+| `dashboard_pass` | string | `""` | Plain password, `vault:KEY`, or `env:VAR`. Hashed in-place at boot — the file on disk only ever holds the hash. |
+| `dashboard_pass_hash` | string | auto | Argon2id hash, written automatically. **Do not set this field manually** — generate via `librefang hash-password`. |
+| `require_auth_for_reads` | bool \| null | `null` | Override the read-endpoint auth allowlist. `null` keeps the default (read endpoints unauthenticated on loopback, authenticated otherwise). |
+
+---
+
+### `[skills]`
+
+User-installed skill loading and disable list. Bundled skills (the 60-or-so that ship with the daemon) are always loaded; `[skills]` only controls what happens with the additional skills users put under `~/.librefang/skills/` and any extra paths.
+
+```toml
+[skills]
+load_user = true
+extra_dirs = ["/srv/librefang/team-skills"]
+disabled = ["legacy-research"]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `load_user` | bool | `true` | Load user-installed skills from `~/.librefang/skills/`. Set `false` to bypass user skills entirely (e.g. when reproducing a bug against just the bundled set). |
+| `extra_dirs` | `Vec<PathBuf>` | `[]` | Additional skill directories to scan. Each must be an absolute path. Scanned read-only after the primary skills dir; **local skills with the same name win** if there's a collision. |
+| `disabled` | `Vec<string>` | `[]` | Names of skills to skip at load time. Quick way to disable an evolved or marketplace-installed skill without deleting its directory. Matches case-sensitively against the manifest `name`. |
+
+---
+
+### `[notification]`
+
+Where approval requests and task-state alerts are sent. Empty defaults mean approvals only show in the dashboard inbox — set channels here to also page Telegram / Slack / email / etc.
+
+```toml
+[notification]
+# All approvals also fan out to Telegram and Slack
+approval_channels = [
+  { kind = "telegram", target = "123456789" },
+  { kind = "slack", target = "C0123456" },
+]
+# Failure alerts only go to email
+alert_channels = [
+  { kind = "email", target = "ops@example.com" },
+]
+
+# Per-agent override — research-bot's approvals go to the research lead instead
+[[notification.agent_rules]]
+agent = "research-bot"
+targets = [{ kind = "telegram", target = "987654321" }]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `approval_channels` | `Vec<NotificationTarget>` | `[]` | Where pending approvals fan out. Each target has `kind` (`telegram`, `slack`, `discord`, `email`, `webhook`, `feishu`, `dingtalk`, …) and a `target` string (chat ID, channel ID, email address, URL, …). |
+| `alert_channels` | `Vec<NotificationTarget>` | `[]` | Where task completion / failure alerts go. Same shape as `approval_channels`. |
+| `agent_rules` | `Vec<AgentNotificationRule>` | `[]` | Per-agent overrides — list `{agent, targets}` to redirect a single agent's approvals away from the global channels. |
+
+For per-tool routing (e.g. "shell_exec approvals go to oncall, file_write approvals go to the dev team"), use `[approval] routing` rather than `[notification]`.
+
+---
+
+### `[triggers]`
+
+Event-driven trigger system safety knobs. Caps how often triggers fire, how many fire per event, and how deep a trigger-spawning-trigger chain can go.
+
+```toml
+[triggers]
+cooldown_secs = 5
+max_per_event = 10
+max_depth = 5
+max_workflow_secs = 3600
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cooldown_secs` | u64 | `5` | Minimum seconds between consecutive firings of the same trigger. Prevents chatty triggers from saturating the agent loop. |
+| `max_per_event` | usize | `10` | Maximum triggers that may fire from a single event. Excess matches log a warning and are dropped. |
+| `max_depth` | usize | `5` | Maximum recursion depth — when a trigger fires another trigger, depth increments. Past `max_depth` the chain aborts with a warning. |
+| `max_workflow_secs` | u64 | `3600` | Wall-clock cap on a single workflow spawned by a trigger. |
+
+Cron and `[[trigger]]` entries on agent manifests share these caps. Lower `max_depth` to 1 in production setups where you don't want triggers to chain at all.
+
+---
+
+### `[task_board]`
+
+Shared task queue safety knobs. The task board is the durable queue agents pull `pending` work from; if a worker claims a task and crashes without completing it, the sweeper resets it back to `pending` after `claim_ttl_secs` so another worker can pick it up.
+
+```toml
+[task_board]
+claim_ttl_secs = 600        # 10 minutes
+sweep_interval_secs = 30
+max_retries = 0             # 0 = retry forever
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `claim_ttl_secs` | u64 | `600` | How long an `in_progress` task may stay claimed before the sweeper resets it. `0` disables the sweep entirely. |
+| `sweep_interval_secs` | u64 | `30` | How often the sweeper scans for stuck tasks. |
+| `max_retries` | u32 | `0` | Maximum number of auto-resets before a stuck task is marked `failed`. `0` = retry indefinitely (the safe default for idempotent work; lower it for tasks that have side effects). |
+
+Tune `claim_ttl_secs` to roughly 2× your slowest task's expected runtime. Set it too low and healthy long-running tasks get yanked out from under their workers; too high and crash recovery is slow.
+
+---
+
+### `[registry]`
+
+Skill / plugin / template registry sync. The registry is mirrored locally in `~/.librefang/registry-cache/` and re-downloaded when the cache is stale.
+
+```toml
+[registry]
+cache_ttl_secs = 86400            # 24 hours
+registry_mirror = "https://ghproxy.cn"
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cache_ttl_secs` | u64 | `86400` | TTL for the local registry cache. |
+| `registry_mirror` | string | `""` | Mirror / proxy prefix for **all outbound GitHub URLs** (tarballs, git clones, raw content). When set, `https://github.com/...` becomes `<mirror>/https://github.com/...`. Useful for users in mainland China where direct GitHub access is slow or blocked. |
+
+Common mirror values: `https://ghproxy.cn`, `https://gh-proxy.com`, an internal corporate proxy. Leave empty to hit GitHub directly.
+
+---
+
+### `[azure_openai]`
+
+Provider-specific config block for Azure OpenAI deployments. Azure uses a different URL format and auth header than standard OpenAI, so the platform driver lives in its own config section. All three fields fall back to environment variables — set whichever style suits your secret-management story.
+
+```toml
+[azure_openai]
+endpoint = "https://my-resource.openai.azure.com"
+deployment = "gpt-4o"
+api_version = "2024-02-01"
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `endpoint` | string \| null | env `AZURE_OPENAI_ENDPOINT` | Azure resource URL (`https://<resource>.openai.azure.com`). |
+| `api_version` | string \| null | env `AZURE_OPENAI_API_VERSION` or `"2024-02-01"` | Azure REST API version. |
+| `deployment` | string \| null | env `AZURE_OPENAI_DEPLOYMENT`, then `default_model.model` | Azure deployment name. If unset, the `default_model.model` value is used. |
+
+Auth is `AZURE_OPENAI_API_KEY` (header: `api-key`, not `Authorization: Bearer`). See the [Azure OpenAI provider entry](/configuration/providers/platforms#azure-openai) for full setup.
+
+---
+
+### Top-level fields (operator paths and per-provider HTTP)
+
+Five additional top-level fields that affect daemon I/O and per-provider networking. All optional, all `None`-by-default unless noted.
+
+```toml
+[kernel]
+config_version = 1
+log_dir = "/var/log/librefang"
+qwen_code_path = "/home/user/.local/bin/qwen"
+
+# Per-provider HTTP knobs (not under any subsection)
+[provider_proxy_urls]
+openai = "http://corp-proxy.local:8080"
+anthropic = "http://corp-proxy.local:8080"
+ollama = ""    # explicit "no proxy" override
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `config_version` | u32 | `1` | Configuration schema version. Used by the auto-migrator to know whether your config needs upgrading on daemon boot. **Do not set manually** — `librefang upgrade` writes it. |
+| `log_dir` | PathBuf \| null | `null` (= `~/.librefang/`) | Custom log directory. Useful when the home directory is on a slow disk and you want logs on local SSD. |
+| `qwen_code_path` | string \| null | `null` (look up `qwen` on `PATH`) | Absolute path to the Qwen Code CLI binary. Necessary when the daemon runs as a service that doesn't inherit the user's full PATH. Equivalent to setting `provider_urls.qwen-code`. |
+| `provider_proxy_urls` | `HashMap<string, string>` | `{}` | Per-provider proxy URL overrides. Empty string `""` for a provider explicitly bypasses the proxy (useful when a global `[proxy]` is set but you want one provider to connect direct, e.g. `ollama`). |
+| `provider_request_timeout_secs` | `HashMap<string, u64>` | `{}` | Per-provider HTTP read-timeout overrides in seconds. Already documented above in `[provider_request_timeout_secs]`; included here for completeness. |
+
+---
+
+### Additional config sections (appendix)
+
+These sections have schemas in code but are typically left at their defaults. Settings here only need to be touched for advanced operator scenarios — listing them so you can find the field name when you do.
+
+```toml
+# Tool timeouts — global default + per-tool overrides
+tool_timeout_secs = 60
+[tool_timeouts]
+"shell_exec" = 300
+"web_*"      = 30
+
+# Fallback LLM providers (tried in order on primary failure)
+[[fallback_providers]]
+provider = "groq"
+model    = "llama-3.3-70b-versatile"
+
+# Static MCP servers loaded at boot
+[[mcp_servers]]
+name = "github"
+url  = "https://api.example.com/mcp"
+
+# Webhook triggers — external systems pushing events into LibreFang
+[webhook_triggers]
+enabled = true
+secret_env = "WEBHOOK_TRIGGERS_SECRET"
+
+# Extensions / MCP integrations — auto-reconnect knobs
+[extensions]
+auto_reconnect = true
+reconnect_max_attempts = 10
+reconnect_max_backoff_secs = 300
+health_check_interval_secs = 60
+
+# Config hot-reload (file watcher)
+[reload]
+enabled = true
+debounce_ms = 500
+
+# Auto-reply background engine for inbound messages
+[auto_reply]
+enabled = false
+# (provider-specific tuning — see librefang-runtime::auto_reply)
+
+# Broadcast routing (multi-recipient delivery)
+[broadcast]
+enabled = false
+max_fanout = 100
+
+# A2UI canvas tool
+[canvas]
+enabled = false
+max_html_bytes = 524288
+allowed_tags = []   # empty = all safe tags
+
+# A2A protocol config (agent-to-agent across instances)
+[a2a]
+listen_path = "/a2a"
+trust_anchors = []
+
+# Device pairing
+[pairing]
+enabled = true
+ttl_secs = 600
+
+# Global exec policy (overrideable per-agent or per-tool)
+[exec_policy]
+allow_shell = true
+shell_allowlist = ["git", "cargo", "npm"]
+```
+
+| Section | Purpose | When to touch |
+|---|---|---|
+| `tool_timeout_secs` / `[tool_timeouts]` | Global default + per-tool wall-clock cap on tool execution. Glob patterns supported (`web_*`); longest match wins. | Bump for slow tools (long shell builds, large embedding requests); lower for cheap web fetches. |
+| `[[fallback_providers]]` | Ordered list of `(provider, model)` pairs the agent loop falls back to when the primary 5xx's or rate-limits. | Pair an expensive frontier model with a cheap fast fallback. |
+| `[[mcp_servers]]` | Static MCP server configs loaded at boot. (Dynamic adds via `/api/mcp/servers`.) | Hard-code a corp internal MCP server you always want connected. |
+| `[webhook_triggers]` | External event injection — push `{event_type, payload}` to the daemon and matching `[[trigger]]` blocks fire. | When an external CI / monitoring system needs to wake an agent. |
+| `[extensions]` | Reconnect / health-check knobs for **MCP integrations** specifically. | Tune backoff for flaky MCP servers. |
+| `[reload]` | `~/.librefang/config.toml` hot-reload watcher. | Disable when running on a network filesystem with unreliable inotify. |
+| `[auto_reply]` | Background engine that auto-responds to certain inbound patterns without going through a full agent turn. | Off by default — opt in for high-volume support channels. |
+| `[broadcast]` | Multi-recipient message fan-out (vs unicast). | Enable when agents need to push to ≥10 channels at once. |
+| `[canvas]` | A2UI tool that renders agent-authored HTML in the dashboard. Off by default for safety. | Enable + audit `allowed_tags` before turning on. |
+| `[a2a]` | A2A protocol listen path + accepted-issuer allowlist for cross-instance auth. | Set when federating multiple LibreFang instances. |
+| `[pairing]` | Device pairing TTL and master toggle. | Disable in single-user setups. |
+| `[exec_policy]` | Global default shell/exec allowlist; per-agent `[exec_policy]` in `agent.toml` overrides this for that agent only. | Lock down the daemon's default; selectively grant trusted agents broader access. |

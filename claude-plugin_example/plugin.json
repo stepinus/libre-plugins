@@ -1,0 +1,58 @@
+{
+  "name": "lcm",
+  "version": "0.9.0",
+  "description": "Lossless context management — DAG-based summarization that preserves every message",
+  "author": {
+    "name": "Pedro Almeida",
+    "url": "https://github.com/ipedro"
+  },
+  "homepage": "https://lossless-claude.com",
+  "repository": "https://github.com/lossless-claude/lcm",
+  "license": "MIT",
+  "keywords": ["context", "memory", "compaction", "summarization", "lcm"],
+  "commands": "./.claude-plugin/commands/",
+  "mcpServers": {
+    "lcm": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp.mjs"]
+    }
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" compact --hook" }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" restore" }]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" session-end" }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" user-prompt" }]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" session-snapshot" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/lcm.mjs\" post-tool" }]
+      }
+    ]
+  }
+}

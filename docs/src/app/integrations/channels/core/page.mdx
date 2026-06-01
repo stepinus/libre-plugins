@@ -1,0 +1,524 @@
+# Core Messaging Channels
+
+These are the most commonly used channel adapters, covering the major consumer messaging platforms and built-in communication options.
+
+---
+
+## Telegram
+
+### Prerequisites
+
+- A Telegram bot token (from [@BotFather](https://t.me/botfather))
+
+### Setup
+
+1. Open Telegram and message `@BotFather`.
+2. Send `/newbot` and follow the prompts to create a new bot.
+3. Copy the bot token.
+4. Set the environment variable:
+
+```bash
+export TELEGRAM_BOT_TOKEN=your-token          # Environment variable
+librefang vault set TELEGRAM_BOT_TOKEN        # Encrypted vault (recommended)
+librefang config set-key telegram             # .env file
+# Or set via dashboard "Set API Key" button   # secrets.env
+```
+
+5. Add to config:
+
+```toml
+[[sidecar_channels]]
+name = "telegram"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.telegram"]
+channel_type = "telegram"
+[sidecar_channels.env]
+TELEGRAM_BOT_TOKEN = "..."
+# ALLOWED_USERS = "123456789,@alice"
+```
+
+The in-process `[channels.telegram]` block is no longer accepted. Declare Telegram as a `[[sidecar_channels]]` entry as shown above.
+
+**Rust alternative (since #5831).** A first-party Rust Telegram sidecar binary at `sdk/rust/librefang-sidecar-telegram/` is wire-equivalent to the Python adapter — same `TELEGRAM_BOT_TOKEN` / `ALLOWED_USERS` env, same Markdown → Telegram-HTML rendering, same allowed-update set. Pick it when you do not want a Python runtime on the host, when per-respawn startup latency matters, or when the ~3 MB stripped binary beats a Python image. Build with `cargo build --release -p librefang-sidecar-telegram` and swap the `command` line above for `/abs/path/to/target/release/librefang-sidecar-telegram`. Full reference: [Rust Telegram sidecar adapter](/architecture/rust-telegram-sidecar).
+
+6. Restart the daemon:
+
+```bash
+librefang start
+```
+
+### How It Works
+
+The Telegram sidecar adapter (`librefang.sidecar.adapters.telegram`, shipped in `librefang-sdk`) uses long-polling via the `getUpdates` API with a 30-second server timeout. On API failures it applies supervised exponential backoff. The daemon restarts the subprocess on crash.
+
+Messages from authorized users are converted to `ChannelMessage` events and routed to the configured agent. Responses are sent back via the `sendMessage` API. Long responses are automatically split to respect Telegram's 4096-character limit.
+
+### File Attachments
+
+Files attached to Telegram messages arrive as **temporary authenticated URLs that the LLM cannot access directly**. The bridge downloads them to a configurable directory and rewrites the message into local-path content blocks — non-image files become a `ContentBlock::Text` with the saved path (the agent then calls `file_read`); images become `ContentBlock::ImageFile`. See [Channel File Downloads](/integrations/channels#channel-file-downloads) on the overview for `file_download_dir` / `file_download_max_bytes` and the stale-file sweeper.
+
+### Interactive Setup
+
+```bash
+librefang channel setup telegram
+```
+
+This walks you through the setup interactively.
+
+---
+
+## Discord
+
+### Prerequisites
+
+- A Discord application and bot (from the [Discord Developer Portal](https://discord.com/developers/applications))
+
+### Setup
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications).
+2. Click "New Application" and name it.
+3. Go to the **Bot** section and click "Add Bot".
+4. Copy the bot token.
+5. Under **Privileged Gateway Intents**, enable:
+   - **Message Content Intent** (required to read message content)
+6. Go to **OAuth2 > URL Generator**:
+   - Select scopes: `bot`
+   - Select permissions: `Send Messages`, `Read Message History`
+   - Copy the generated URL and open it to invite the bot to your server.
+7. Set the environment variable:
+
+```bash
+export DISCORD_BOT_TOKEN=your-token           # Environment variable
+librefang vault set DISCORD_BOT_TOKEN         # Encrypted vault (recommended)
+librefang config set-key discord              # .env file
+# Or set via dashboard "Set API Key" button   # secrets.env
+```
+
+8. Add to config (Discord is an out-of-process sidecar adapter):
+
+```toml
+[[sidecar_channels]]
+name = "discord"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.discord"]
+channel_type = "discord"
+
+[sidecar_channels.env]
+DISCORD_BOT_TOKEN = "..."
+# DISCORD_ALLOWED_GUILDS = "123,456"
+# DISCORD_INTENTS = "37376"
+```
+
+9. Restart the daemon.
+
+### How It Works
+
+The Discord sidecar (`librefang.sidecar.adapters.discord` in the
+Python SDK) connects to the Discord Gateway via WebSocket (v10) in a
+supervised subprocess and speaks newline-delimited JSON-RPC over
+stdio with the daemon. It listens for `MESSAGE_CREATE` events and
+emits them as `message` events; agent replies are POSTed via the REST
+API's `channels/{id}/messages` endpoint.
+
+The sidecar handles Gateway reconnection, periodic heartbeats (with
+RFC-required jitter on the first beat), session resumption, and
+gateway close-code handling automatically. Daemon-side supervision
+(restart, exponential backoff, circuit-break) is configured via the
+common `[[sidecar_channels]]` fields documented under
+[Sidecar channels](/configuration/channels#sidecar_channels).
+
+---
+
+## Slack
+
+### Prerequisites
+
+- A Slack app with Socket Mode enabled
+
+### Setup
+
+1. Go to [Slack API](https://api.slack.com/apps) and click "Create New App" > "From Scratch".
+2. Enable **Socket Mode** (Settings > Socket Mode):
+   - Generate an App-Level Token with scope `connections:write`.
+   - Copy the token (`xapp-...`).
+3. Go to **OAuth & Permissions** and add Bot Token Scopes:
+   - `chat:write`
+   - `app_mentions:read`
+   - `im:history`
+   - `im:read`
+   - `im:write`
+4. Install the app to your workspace.
+5. Copy the Bot User OAuth Token (`xoxb-...`).
+6. Set the environment variables:
+
+```bash
+export SLACK_APP_TOKEN=xapp-...               # Environment variable
+export SLACK_BOT_TOKEN=xoxb-...
+librefang vault set SLACK_APP_TOKEN           # Encrypted vault (recommended)
+librefang vault set SLACK_BOT_TOKEN
+librefang config set-key slack                # .env file
+# Or set via dashboard "Set API Key" button   # secrets.env
+```
+
+7. Add to config (Slack is an out-of-process sidecar adapter):
+
+```toml
+[[sidecar_channels]]
+name = "slack"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.slack"]
+channel_type = "slack"
+
+[sidecar_channels.env]
+SLACK_APP_TOKEN = "xapp-..."
+SLACK_BOT_TOKEN = "xoxb-..."
+# SLACK_FORCE_FLAT_REPLIES = "false"   # set "true" to post replies as top-level messages
+```
+
+8. Restart the daemon.
+
+### How It Works
+
+The Slack adapter uses Socket Mode, which establishes a WebSocket connection to Slack's servers. This avoids the need for a public webhook URL. The adapter receives events (app mentions, direct messages) and routes them to the configured agent. Responses are posted via the `chat.postMessage` Web API. When `threading = true`, replies are sent to the message's thread via `thread_ts`.
+
+### Processing-State Reactions
+
+The Slack adapter shows live "I'm working on it" feedback by adding 👀 to the user's message on receive and replacing it with ✅ when the reply is sent. Toggle with the `SLACK_REACTIONS` environment variable (default `true` — set to `false` to disable). `already_reacted` and `no_reaction` errors are silently ignored, so reaction failures never block message processing. See [Reactions and Processing State](/integrations/channels#reactions-and-processing-state) on the channels overview.
+
+---
+
+## WhatsApp (sidecar)
+
+WhatsApp migrated from the in-process Rust adapter to a Python sidecar (`librefang.sidecar.adapters.whatsapp`, stdlib-only). The in-process `[channels.whatsapp]` block is no longer recognised. Both modes are preserved: **Cloud API** (Meta's official Business API) and **Web/QR mode** (the Node.js `@librefang/whatsapp-gateway` Baileys process).
+
+### Prerequisites
+
+- For Cloud API: a Meta Business account with WhatsApp Cloud API access (phone number ID, access token, app secret)
+- For Web/QR mode: Node.js >= 18 on the daemon host and a personal WhatsApp account
+- `python3` on the daemon host (no third-party Python packages required)
+
+### Cloud API mode setup
+
+1. Go to [Meta for Developers](https://developers.facebook.com/) and create a Business App with the WhatsApp product.
+2. Set up a phone number; note the **Phone Number ID** and **Permanent Access Token**. Pick any string for the **Verify Token**.
+3. In the app's Settings, copy the **App Secret** — that's the HMAC-SHA256 key for `X-Hub-Signature-256`.
+4. Add to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "whatsapp"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.whatsapp"]
+channel_type = "whatsapp"
+[sidecar_channels.env]
+WHATSAPP_PHONE_NUMBER_ID = "your-phone-id"
+WHATSAPP_WEBHOOK_PORT = "8460"
+# WHATSAPP_DM_POLICY = "respond"
+# WHATSAPP_GROUP_POLICY = "all"
+```
+
+5. Put `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` in `~/.librefang/secrets.env`.
+6. In the Meta dashboard, set the Webhook URL to `https://your-domain.com:8460/webhook` (or whatever `WHATSAPP_WEBHOOK_PORT` / `WHATSAPP_WEBHOOK_PATH` you chose). Subscribe to `messages`. Use the same Verify Token.
+7. Restart the daemon.
+
+The sidecar runs its own webhook server, verifies `X-Hub-Signature-256` against the App Secret on every inbound, and sends outbound via `https://graph.facebook.com/v17.0/{phone_id}/messages`. Unlike the legacy Rust adapter (whose `start()` was a stub that never parsed inbound), this sidecar implements the full Cloud API webhook handler.
+
+### Web/QR mode setup
+
+1. Install + run the Baileys gateway separately:
+
+```bash
+npx @librefang/whatsapp-gateway
+# Listens on http://127.0.0.1:3009 by default
+```
+
+2. Scan the QR code printed by the gateway with WhatsApp → Linked Devices.
+3. Add to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "whatsapp"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.whatsapp"]
+channel_type = "whatsapp"
+[sidecar_channels.env]
+WHATSAPP_GATEWAY_URL = "http://localhost:3009"
+```
+
+4. Restart the daemon.
+
+In Web/QR mode the gateway POSTs inbound directly to LibreFang's REST API (`/api/agents/{id}/message`), bypassing the sidecar; outbound replies route through the sidecar to `{gateway_url}/message/send`. The kernel **no longer auto-spawns the gateway** (the embedded `whatsapp_gateway.rs` module was removed in this migration) — you must run it as a separate process.
+
+### Group chat & DM policy
+
+The sidecar applies the same DM × group policy as the legacy Rust adapter:
+
+| `WHATSAPP_DM_POLICY` | Behaviour |
+|---|---|
+| `respond` (default) | Respond to all DMs |
+| `allowed_only` | Respond only when sender's phone is in `WHATSAPP_ALLOWED_USERS` |
+| `ignore` | Drop all DMs |
+
+| `WHATSAPP_GROUP_POLICY` | Behaviour |
+|---|---|
+| `all` (default) | Respond to all group messages |
+| `mention_only` | Respond only when bot phone or `WHATSAPP_BOT_NAME` appears in the text |
+| `commands_only` | Respond only to `/cmd` messages |
+| `ignore` | Drop all group messages |
+
+For `mention_only` set `WHATSAPP_BOT_PHONE` (with `+`, e.g. `+15551234567`) and / or `WHATSAPP_BOT_NAME` (case-insensitive substring).
+
+---
+
+## WeChat (Personal) — sidecar
+
+WeChat is provided by the Python sidecar adapter (`librefang.sidecar.adapters.wechat`). The in-process `[channels.wechat]` config block was removed in the sidecar migration. Declare WeChat as a `[[sidecar_channels]]` entry instead.
+
+### Prerequisites
+
+- A personal WeChat account (iOS 8.0.70+ recommended)
+- WeChat ClawBot plugin access (currently in gradual rollout)
+- `python3` on the daemon host (stdlib-only sidecar — no third-party packages)
+
+### Setup
+
+1. Add to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "wechat"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.wechat"]
+channel_type = "wechat"
+[sidecar_channels.env]
+# WECHAT_BOT_TOKEN = ""        # leave blank to trigger QR login
+# WECHAT_ALLOWED_USERS = ""    # comma-separated hash@im.wechat
+```
+
+2. Start (or restart) the LibreFang daemon. The sidecar will log a QR code at INFO — scan it with your WeChat app to confirm. After the first QR login, paste the `bot_token` into `WECHAT_BOT_TOKEN` (in `~/.librefang/secrets.env`) to skip the QR flow on subsequent restarts.
+
+### How It Works
+
+The WeChat adapter uses Tencent's official **iLink protocol** (`ilinkai.weixin.qq.com`), the same protocol behind the WeChat ClawBot plugin. No third-party proxies or unofficial APIs are involved.
+
+**Connection flow:**
+1. **QR Login** — calls `GET /ilink/bot/get_bot_qrcode` to generate a QR code, then polls `GET /ilink/bot/get_qrcode_status` until the user scans and confirms. Returns a `bot_token` for all subsequent requests.
+2. **Long-Polling** — calls `POST /ilink/bot/getupdates` with a cursor (`get_updates_buf`). The server holds the connection for up to 35 seconds until new messages arrive, then returns them along with an updated cursor.
+3. **Sending** — calls `POST /ilink/bot/sendmessage` with the `context_token` from the inbound message to associate the reply with the correct conversation.
+4. **Typing** — calls `POST /ilink/bot/sendtyping` with a `typing_ticket` (fetched from `POST /ilink/bot/getconfig`) to show a typing indicator.
+
+**Supported message types:** text, image, voice, file, video (all 5 iLink item types).
+
+**Reconnection:** If a `bot_token` is configured, the adapter skips QR login and resumes polling immediately. On network errors, exponential backoff is applied (2s → 60s max).
+
+### Limitations
+
+- **Media upload** is not yet supported (CDN flow with AES-128-ECB encryption). Incoming media is received; outgoing media falls back to text placeholders.
+- **Group chat** detection is not yet implemented.
+- **Streaming** responses are not yet supported (messages are sent as complete text).
+- **Grayscale rollout** — the iLink API may not be available to all WeChat accounts yet.
+
+---
+
+## Signal (sidecar)
+
+Signal migrated from an in-process Rust adapter to an out-of-process Python sidecar (`librefang.sidecar.adapters.signal`).
+
+### Prerequisites
+
+- A running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api) instance (Docker image recommended), registered with a phone number.
+- Python 3 + the `librefang` SDK (`pip install -e sdk/python`).
+
+### Setup
+
+1. Stand up `signal-cli-rest-api` (typically as a container behind an HTTPS reverse proxy) and register the bot's phone number with Signal.
+2. Declare the sidecar in `~/.librefang/config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "signal"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.signal"]
+channel_type = "signal"
+default_agent = "assistant"
+[sidecar_channels.env]
+SIGNAL_API_URL = "https://signal-cli.example.com"
+SIGNAL_NUMBER  = "+15555550100"
+# SIGNAL_ALLOWED_USERS = "+15555550199,+15555550200"   # optional
+# SIGNAL_POLL_INTERVAL_SECS = "2"                       # optional
+# SIGNAL_ALLOW_LOCAL = "1"                              # only if API runs on localhost
+```
+
+3. (Optional) If `signal-cli-rest-api` was started with `--api-key`, add `SIGNAL_API_KEY=…` to `~/.librefang/secrets.env`.
+4. Restart the daemon.
+
+### How It Works
+
+The sidecar polls `GET /v1/receive/{phone}` every `SIGNAL_POLL_INTERVAL_SECS` (default 2 s) and emits each new `dataMessage.message` to the kernel over stdio. Outbound messages use `POST /v2/send`. The SSRF guard rejects `SIGNAL_API_URL` values that resolve to private / loopback / CGNAT / link-local addresses unless `SIGNAL_ALLOW_LOCAL=1` is set explicitly.
+
+### Plain-Text Output by Default
+
+Signal output defaults to `OutputFormat::PlainText` because `signal-cli` renders Markdown asterisks and underscores literally. The mapping is keyed off the sidecar entry's `channel_type = "signal"`, so the default still applies after the migration. Per-channel `output_format` overrides on `[[sidecar_channels]]` are not currently exposed — flip the format on the agent if you need Markdown — see [Signal Plain-Text Default](/integrations/channels#signal-plain-text-default) on the channels overview.
+
+### Media Attachments
+
+The Rust adapter delivered `Image`, `Voice`, `Video`, `Audio`, `Animation`, `File`, `FileData`, and `MediaGroup` content blocks via `base64_attachments` on `/v2/send`. The sidecar currently routes anything other than text to the standard `(Unsupported content type)` placeholder; a follow-up will re-wire base64 attachments end-to-end through the sidecar runtime.
+
+---
+
+## Matrix (sidecar)
+
+Matrix migrated from an in-process Rust adapter to an out-of-process Python sidecar (`librefang.sidecar.adapters.matrix`).
+
+### Prerequisites
+
+- A Matrix homeserver account and access token (Element-issued token works).
+- Python 3 + the `librefang` SDK (`pip install -e sdk/python`).
+
+### Setup
+
+1. Create a bot account on your Matrix homeserver (or use an existing one).
+2. Generate an access token (Element settings → Help & About → Access Token, or `POST /_matrix/client/v3/login`).
+3. Put the token in `~/.librefang/secrets.env`:
+
+```bash
+MATRIX_ACCESS_TOKEN=syt_...
+```
+
+4. Declare the sidecar in `~/.librefang/config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "matrix"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.matrix"]
+channel_type = "matrix"
+default_agent = "assistant"
+[sidecar_channels.env]
+MATRIX_HOMESERVER_URL = "https://matrix.org"
+MATRIX_USER_ID = "@librefang-bot:matrix.org"
+# MATRIX_ALLOWED_ROOMS = "!abc:matrix.org,!def:matrix.org"  # optional
+# MATRIX_ACCOUNT_ID = "prod-bot"                             # optional
+# MATRIX_MAX_UPLOAD_BYTES = "52428800"                       # optional, default 50 MiB
+```
+
+5. Invite the bot to the rooms you want it to monitor.
+6. Restart the daemon.
+
+### How It Works
+
+The sidecar polls `GET /_matrix/client/v3/sync` with the bot's access token, 30 s server timeout, `since` cursor for incremental delivery. Inbound `m.room.message` events (`m.text` / `m.notice` / `m.emote` / `m.image` / `m.file` / `m.audio` / `m.video`) are emitted to the kernel; outbound replies use `PUT /_matrix/client/v3/rooms/{room}/send/{type}/{txn}`. Markdown is rendered to Matrix's HTML subset for `formatted_body`; `m.thread` and `m.replace` (edit) relations are wired through so threaded replies and streaming edits work out of the box.
+
+---
+
+## Email
+
+### Prerequisites
+
+- An email account with IMAP and SMTP access
+
+### Setup
+
+1. For Gmail, create an [App Password](https://myaccount.google.com/apppasswords).
+2. Set the environment variable:
+
+```bash
+export EMAIL_PASSWORD=your-password           # Environment variable
+librefang vault set EMAIL_PASSWORD            # Encrypted vault (recommended)
+librefang config set-key email                # .env file
+# Or set via dashboard "Set API Key" button   # secrets.env
+```
+
+3. Add to config (email runs as an out-of-process sidecar adapter, `librefang.sidecar.adapters.email`):
+
+```toml
+[[sidecar_channels]]
+name = "email"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.email"]
+channel_type = "email"
+[sidecar_channels.env]
+EMAIL_IMAP_HOST = "imap.gmail.com"
+EMAIL_SMTP_HOST = "smtp.gmail.com"
+EMAIL_USERNAME = "you@gmail.com"
+# EMAIL_IMAP_PORT = "993"
+# EMAIL_SMTP_PORT = "587"
+# EMAIL_POLL_INTERVAL_SECS = "30"
+```
+
+`EMAIL_PASSWORD` belongs in `~/.librefang/secrets.env`.
+
+4. Hot-reload (`curl -X POST http://127.0.0.1:4545/api/channels/reload`) or restart the daemon.
+
+### How It Works
+
+The email adapter polls the IMAP inbox at the configured interval. New emails are parsed (subject + body) and routed to the configured agent. Responses are sent as reply emails via SMTP, preserving the subject line threading.
+
+---
+
+## WebChat (Built-in)
+
+The WebChat UI is embedded in the daemon and requires no configuration. When the daemon is running:
+
+```
+http://127.0.0.1:4545/
+```
+
+Features:
+- Real-time chat via WebSocket
+- Streaming responses (text deltas as they arrive)
+- Agent selection (switch between running agents)
+- Token usage display
+- No authentication required on localhost (protected by CORS)
+
+---
+
+## Message Truncation for Platform Limits
+
+**Source:** `librefang-channels/src/message_truncator.rs`
+
+Messaging platforms impose hard character limits on outbound messages, counted in
+**UTF-16 code units** rather than bytes or Unicode code points. LibreFang measures
+message length in UTF-16 units and handles oversized messages automatically.
+
+### Platform Limits
+
+| Platform | UTF-16 unit limit | Behavior when exceeded |
+|---|---|---|
+| Telegram | 4 096 | Message is split into multiple sequential messages |
+| Discord | 2 000 | Message is split into multiple sequential messages |
+| Other channels | Configurable | Truncated by default unless split is enabled |
+
+### How UTF-16 Length Differs from Byte Length
+
+Most ASCII text has the same byte count and UTF-16 unit count. The difference matters
+for:
+
+- **Emoji** (`😀`): 2 UTF-16 units, but 4 bytes in UTF-8
+- **Supplementary CJK characters**: 2 UTF-16 units, 4 bytes in UTF-8
+- **Basic CJK / Korean / Arabic**: 1 UTF-16 unit, 3 bytes in UTF-8
+
+A string that fits in 2 000 bytes may still exceed 2 000 UTF-16 units, or vice versa.
+Using byte length as a proxy silently produces truncated or rejected messages.
+
+### Truncation
+
+`truncate_to_utf16_limit(text, limit)` uses binary search over the string's UTF-16
+unit positions to find the longest prefix that fits, then cuts at a valid Unicode scalar
+boundary. The result is never split mid-codepoint or mid-surrogate-pair.
+
+### Splitting
+
+`split_to_utf16_chunks(text, limit)` divides the message into sequential chunks, each
+within `limit` UTF-16 units. LibreFang sends the chunks as separate messages in order,
+preserving all content. The split boundary respects Unicode scalar boundaries — no
+chunk ends in the middle of a character.
+
+### Splitting and chunking are now sidecar-side
+
+Every channel adapter runs out-of-process as a sidecar now, so each
+sidecar owns its own chunking at platform limits — the pre-migration
+`split_long_messages` knob on `[channels.<name>]` is gone with the
+rest of `ChannelsConfig`. Sidecars cannot be told to truncate
+instead of split from the daemon side; if you need that behaviour
+for a custom sidecar, implement it inside that sidecar.

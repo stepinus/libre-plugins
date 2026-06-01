@@ -1,0 +1,835 @@
+# Skill Development
+
+Skills are pluggable tool bundles that extend agent capabilities in LibreFang. A skill packages one or more tools with their implementation, letting agents do things that built-in tools do not cover. This guide covers skill creation, the manifest format, Python and WASM runtimes, publishing to FangHub, and CLI management.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Skill Format](#skill-format)
+- [Skill Config Variables](#skill-config-variables)
+- [Python Skills](#python-skills)
+- [WASM Skills](#wasm-skills)
+- [Skill Requirements](#skill-requirements)
+- [Installing Skills](#installing-skills)
+- [Publishing to FangHub](#publishing-to-fanghub)
+- [CLI Commands](#cli-commands)
+- [OpenClaw Compatibility](#openclaw-compatibility)
+- [Skill Self-Evolution](#skill-self-evolution)
+- [Best Practices](#best-practices)
+
+---
+
+## Overview
+
+A skill consists of:
+
+1. A **manifest** (`skill.toml` or `SKILL.md`) that declares metadata, runtime type, provided tools, and requirements.
+2. An **entry point** (Python script, WASM module, Node.js module, or prompt-only Markdown) that implements the tool logic.
+
+Skills are installed to `~/.librefang/skills/`. Official skills are available in the registry and can be installed from the dashboard.
+
+### Supported Runtimes
+
+| Runtime | Language | Sandboxed | Notes |
+|---------|----------|-----------|-------|
+| `python` | Python 3.8+ | No (subprocess with `env_clear()`) | Easiest to write. Uses stdin/stdout JSON protocol. |
+| `wasm` | Rust, C, Go, etc. | Yes (Wasmtime dual metering) | Fully sandboxed. Best for security-sensitive tools. |
+| `node` | JavaScript/TypeScript | No (subprocess) | OpenClaw compatibility. |
+| `prompt_only` | Markdown | N/A | Expert knowledge injected into system prompt. No code execution. |
+| `builtin` | Rust | N/A | Compiled into the binary. For core tools only. |
+
+### 60 Bundled Skills
+
+LibreFang provides 60 expert knowledge skills available for installation from the dashboard:
+
+| Category | Skills |
+|----------|--------|
+| DevOps & Infra | `ci-cd`, `ansible`, `prometheus`, `nginx`, `kubernetes`, `terraform`, `helm`, `docker`, `sysadmin`, `shell-scripting`, `linux-networking` |
+| Cloud | `aws`, `gcp`, `azure` |
+| Languages | `rust-expert`, `python-expert`, `typescript-expert`, `golang-expert` |
+| Frontend | `react-expert`, `nextjs-expert`, `css-expert` |
+| Databases | `postgres-expert`, `redis-expert`, `sqlite-expert`, `mongodb`, `elasticsearch`, `sql-analyst` |
+| APIs & Web | `graphql-expert`, `openapi-expert`, `api-tester`, `oauth-expert` |
+| AI/ML | `ml-engineer`, `llm-finetuning`, `vector-db`, `prompt-engineer` |
+| Security | `security-audit`, `crypto-expert`, `compliance` |
+| Dev Tools | `github`, `git-expert`, `jira`, `linear-tools`, `sentry`, `code-reviewer`, `regex-expert` |
+| Writing | `technical-writer`, `writing-coach`, `email-writer`, `presentation` |
+| Data | `data-analyst`, `data-pipeline` |
+| Collaboration | `slack-tools`, `notion`, `confluence`, `figma-expert` |
+| Career | `interview-prep`, `project-manager` |
+| Advanced | `wasm-expert`, `pdf-reader`, `web-search` |
+
+These are `prompt_only` skills using the SKILL.md format -- expert knowledge that gets injected into the agent's system prompt.
+
+### SKILL.md Format
+
+The SKILL.md format (also used by OpenClaw) uses YAML frontmatter and a Markdown body:
+
+```markdown
+---
+name: rust-expert
+description: Expert Rust programming knowledge
+---
+
+# Rust Expert
+
+## Key Principles
+- Ownership and borrowing rules...
+- Lifetime annotations...
+
+## Common Patterns
+...
+```
+
+SKILL.md files are automatically parsed and converted to `prompt_only` skills. All SKILL.md files pass through an automated **prompt injection scanner** that detects override attempts, data exfiltration patterns, and shell references before inclusion.
+
+---
+
+## Skill Format
+
+### Directory Structure
+
+```
+my-skill/
+  skill.toml          # Manifest (required)
+  src/
+    main.py           # Entry point (for Python skills)
+  README.md           # Optional documentation
+```
+
+### Manifest (skill.toml)
+
+```toml
+[skill]
+name = "web-summarizer"
+version = "0.1.0"
+description = "Summarizes any web page into bullet points"
+author = "librefang-community"
+license = "MIT"
+tags = ["web", "summarizer", "research"]
+
+[runtime]
+type = "python"
+entry = "src/main.py"
+
+[[tools.provided]]
+name = "summarize_url"
+description = "Fetch a URL and return a concise bullet-point summary"
+input_schema = { type = "object", properties = { url = { type = "string", description = "The URL to summarize" } }, required = ["url"] }
+
+[[tools.provided]]
+name = "extract_links"
+description = "Extract all links from a web page"
+input_schema = { type = "object", properties = { url = { type = "string" } }, required = ["url"] }
+
+[requirements]
+tools = ["web_fetch"]
+capabilities = ["NetConnect(*)"]
+```
+
+### Manifest Sections
+
+#### [skill] -- Metadata
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique skill name (used as install directory name) |
+| `version` | string | No | Semantic version (default: `"0.1.0"`) |
+| `description` | string | No | Human-readable description |
+| `author` | string | No | Author name or organization |
+| `license` | string | No | License identifier (e.g., `"MIT"`, `"Apache-2.0"`) |
+| `tags` | array | No | Tags for discovery on FangHub |
+
+#### [runtime] -- Execution Configuration
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | `"python"`, `"wasm"`, `"node"`, or `"builtin"` |
+| `entry` | string | Yes | Relative path to the entry point file |
+
+#### [[tools.provided]] -- Tool Definitions
+
+Each `[[tools.provided]]` entry defines one tool that the skill provides:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Tool name (must be unique across all tools) |
+| `description` | string | Yes | Description shown to the LLM |
+| `input_schema` | object | Yes | JSON Schema defining the tool's input parameters |
+
+#### [requirements] -- Host Requirements
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tools` | array | Built-in tools this skill needs the host to provide |
+| `capabilities` | array | Capability strings the agent must have |
+
+---
+
+## Skill Config Variables
+
+Skills can declare configuration variables in `skill.toml`. At agent startup, LibreFang resolves each variable from the user's `~/.librefang/config.toml` and injects the resolved values into the agent's system prompt, making them available to the skill without hard-coding secrets or environment-specific values.
+
+### Declaring variables in `skill.toml`
+
+Add one `[[config_vars]]` entry per variable:
+
+```toml
+[[config_vars]]
+key = "wiki.base_url"
+description = "Base URL of the internal wiki"
+default = "https://wiki.example.com"
+
+[[config_vars]]
+key = "db.host"
+description = "Database hostname"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `key` | string | Yes | Dot-separated key in the form `<namespace>.<field>`. |
+| `description` | string | No | Human-readable description shown in the dashboard. |
+| `default` | string | No | Fallback value when the key is absent from the user's config. |
+
+### Storing values in `~/.librefang/config.toml`
+
+The namespace before the first dot maps to a TOML table under `[skills.config]`:
+
+```toml
+[skills.config.wiki]
+base_url = "https://wiki.corp.example.com"
+
+[skills.config.db]
+host = "postgres.internal"
+```
+
+### System prompt injection
+
+Resolved variables are appended to the system prompt as a labeled block before the skill's own prompt content:
+
+```
+## Skill Config Variables
+wiki.base_url = https://wiki.corp.example.com
+db.host = postgres.internal
+```
+
+### Resolution rules
+
+- **Default fallback**: If a key is not present in `~/.librefang/config.toml` but the skill declares a `default`, the default value is used.
+- **Missing without default**: If a key is absent from both the user config and the skill declaration (no `default`), the variable is silently omitted from the injected block.
+- **Deduplication**: When multiple installed skills declare the same key, the value from the **first** skill loaded takes precedence. Subsequent declarations of the same key are ignored for injection purposes, though each skill may still specify its own `default` for documentation.
+
+---
+
+## Environment Variable Passthrough
+
+Skill subprocesses run with `env_clear()` by default — no host environment variables are inherited. This is the right default for third-party code: API keys, tokens, and other secrets in the host environment must not silently leak into a skill's subprocess.
+
+Some skills legitimately need a specific host variable. The canonical example is a skill that wraps a CLI tool which uses an env-based credential helper (e.g. `gog`'s file-backed keyring needs `GOG_KEYRING_PASSWORD`).
+
+This works as a **two-party opt-in**: the skill author declares which variables the skill *wants*, and the operator (the person running LibreFang) decides which of those requests to *grant*.
+
+### Skill author: declare in `skill.toml`
+
+Add `env_passthrough` at the top level of the manifest, sibling to `[skill]` and `[runtime]`:
+
+```toml
+env_passthrough = ["GOG_KEYRING_PASSWORD", "GOG_KEYRING_BACKEND"]
+
+[skill]
+name = "gog"
+# …
+```
+
+The variable *names* are public (they live in the manifest); only their host-side *values* cross the subprocess boundary, and only when the operator has not blocked the name.
+
+### Operator: gate via `[skills]` config
+
+The operator's config in `~/.librefang/config.toml` decides which requests are honored:
+
+```toml
+[skills]
+# Glob patterns that block matching env-var names regardless of what the
+# skill manifest declares. These are the defaults; replace with your own
+# list, or set to [] to disable the deny check.
+env_passthrough_denied_patterns = [
+    "*_KEY",
+    "*_TOKEN",
+    "*_PASSWORD",
+    "*_SECRET",
+    "*_API_KEY",
+    "AWS_*",
+    "GITHUB_*",
+]
+
+# Per-skill explicit allow overrides. Lets you grant a specific skill an
+# env var that would otherwise be blocked by env_passthrough_denied_patterns.
+[skills.env_passthrough_per_skill]
+gog = ["GOG_KEYRING_PASSWORD"]
+```
+
+If you don't configure `[skills]` at all, the defaults above apply.
+
+### Resolution
+
+For each variable name in a skill's `env_passthrough`, in order:
+
+1. **Hard block** — names like `LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, etc. are dropped regardless of skill manifest or operator config. These either inject code or redirect imports/library lookup, and would defeat the `env_clear` isolation. The full list is in `librefang-skills::loader::FORBIDDEN_PASSTHROUGH`.
+2. **Kernel-reserved** — `PATH`, `HOME`, `PYTHONIOENCODING`, etc. are dropped. The kernel sets these explicitly per-runtime (it may have deliberately narrowed `PATH`); skills cannot override them.
+3. **Operator deny** — names matching `env_passthrough_denied_patterns` are dropped *unless* listed under `env_passthrough_per_skill` for the running skill.
+4. Anything that survives is forwarded if it's set in the host environment. Variables not present in the host environment are silently skipped.
+
+Each rejection is logged at `WARN` level so operators can debug why a declared variable did not reach a skill subprocess.
+
+### When to use it
+
+- **Use `env_passthrough`** when a skill calls out to a CLI that authenticates via env-based credential helpers (keyring backends, `*_PASSWORD` vars, etc.).
+- **Don't use `env_passthrough` for API keys/tokens.** Use [Skill Config Variables](#skill-config-variables) instead — those go through `~/.librefang/config.toml` and are injected via the system prompt without giving the skill subprocess access to host secrets.
+
+---
+
+## Python Skills
+
+Python skills are the simplest to write. They run as subprocesses and communicate via JSON over stdin/stdout.
+
+### Protocol
+
+1. LibreFang sends a JSON payload to the script's stdin:
+
+```json
+{
+  "tool": "summarize_url",
+  "input": {
+    "url": "https://example.com"
+  },
+  "agent_id": "uuid-...",
+  "agent_name": "researcher"
+}
+```
+
+2. The script processes the input and writes a JSON result to stdout:
+
+```json
+{
+  "result": "- Point one\n- Point two\n- Point three"
+}
+```
+
+If an error occurs, return an error object:
+
+```json
+{
+  "error": "Failed to fetch URL: connection refused"
+}
+```
+
+### Example: Web Summarizer
+
+`src/main.py`:
+
+```python
+#!/usr/bin/env python3
+"""LibreFang skill: web-summarizer"""
+import json
+import sys
+import urllib.request
+
+
+def summarize_url(url: str) -> str:
+    """Fetch a URL and return a basic summary."""
+    req = urllib.request.Request(url, headers={"User-Agent": "LibreFang-Skill/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        content = resp.read().decode("utf-8", errors="replace")
+
+    # Simple extraction: first 500 chars as summary
+    text = content[:500].strip()
+    return f"Summary of {url}:\n{text}..."
+
+
+def extract_links(url: str) -> str:
+    """Extract all links from a web page."""
+    import re
+
+    req = urllib.request.Request(url, headers={"User-Agent": "LibreFang-Skill/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        content = resp.read().decode("utf-8", errors="replace")
+
+    links = re.findall(r'href="(https?://[^"]+)"', content)
+    unique_links = list(dict.fromkeys(links))
+    return "\n".join(unique_links[:50])
+
+
+def main():
+    payload = json.loads(sys.stdin.read())
+    tool_name = payload["tool"]
+    input_data = payload["input"]
+
+    try:
+        if tool_name == "summarize_url":
+            result = summarize_url(input_data["url"])
+        elif tool_name == "extract_links":
+            result = extract_links(input_data["url"])
+        else:
+            print(json.dumps({"error": f"Unknown tool: {tool_name}"}))
+            return
+
+        print(json.dumps({"result": result}))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Using the LibreFang Python SDK
+
+For more advanced skills, use the Python SDK (`sdk/python/librefang_sdk.py`):
+
+```python
+#!/usr/bin/env python3
+from librefang_sdk import SkillHandler
+
+handler = SkillHandler()
+
+@handler.tool("summarize_url")
+def summarize_url(url: str) -> str:
+    # Your implementation here
+    return "Summary..."
+
+@handler.tool("extract_links")
+def extract_links(url: str) -> str:
+    # Your implementation here
+    return "link1\nlink2"
+
+if __name__ == "__main__":
+    handler.run()
+```
+
+---
+
+## WASM Skills
+
+WASM skills run inside LibreFang's in-process `WasmSandbox`: capability-gated, with per-invocation fuel, linear-memory, and wall-clock limits.
+They are ideal for security-sensitive tools because nothing outside the granted capabilities is reachable.
+
+The easiest way to write one in Rust is the `librefang-skill` SDK, which hides the raw guest ABI behind a single macro.
+
+### Building a WASM skill (Rust)
+
+1. Create a `cdylib` crate that depends on `librefang-skill`:
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+librefang-skill = "0.1"
+serde_json = "1"
+
+[profile.release]
+panic = "abort"   # the guest does not unwind; also shrinks the module
+```
+
+2. Write a handler and register it with the `skill!` macro:
+
+```rust
+// src/lib.rs
+use librefang_skill::{skill, Request};
+use serde_json::{json, Value};
+
+fn handle(req: Request) -> Result<Value, String> {
+    match req.tool.as_str() {
+        "my_tool" => {
+            let param = req.input.get("param").and_then(Value::as_str).unwrap_or("");
+            Ok(json!({ "result": format!("Processed: {param}") }))
+        }
+        other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+skill!(handle);
+```
+
+The handler receives the same `{tool, input, config}` envelope every runtime gets.
+Returning `Err` surfaces to the agent as `{"error": ...}`, exactly as a non-zero exit does for the subprocess runtimes.
+
+3. Build for `wasm32-unknown-unknown` and copy the artifact to the skill root:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
+cp target/wasm32-unknown-unknown/release/skill.wasm skill.wasm
+```
+
+<Note>
+  The target is `wasm32-unknown-unknown`, **not** `wasm32-wasi`.
+  The sandbox provides only the `librefang` host imports (`host_call`, `host_log`); a WASI module imports `wasi_snapshot_preview1` and would fail to instantiate.
+  Copy the artifact out of `target/` because the skill packager excludes build directories.
+</Note>
+
+4. Reference it in `skill.toml`:
+
+```toml
+[runtime]
+type = "wasm"
+entry = "skill.wasm"
+```
+
+`librefang skill create` (choose the `wasm` runtime) scaffolds all of the above, and `librefang skill test <dir>` runs a WASM skill locally through the real sandbox.
+
+### Host calls
+
+A WASM skill reaches host functionality through `librefang_skill::host`.
+Each method requires the matching capability in `[requirements] capabilities`, and a few charge fuel against the invocation budget (denial-of-wallet guard):
+
+| function | capability | fuel |
+| --- | --- | --- |
+| `time_now`, `kv_get`, `kv_set` | — | free |
+| `env_read` | `EnvRead(<glob>)` | free |
+| `fs_read`, `fs_list` | `FileRead(<glob>)` | free |
+| `fs_write` | `FileWrite(<glob>)` | free |
+| `net_fetch` | `NetConnect(<host:port>)` | paid |
+| `shell_exec` | `ShellExec(<glob>)` | paid |
+| `agent_send` | `AgentMessage(<glob>)` | paid |
+| `agent_spawn` | `AgentSpawn` | paid |
+
+A capability string that fails to parse is dropped (deny-by-default), so a typo means "not granted" rather than a silent over-grant.
+
+### Sandbox limits
+
+The WASM sandbox enforces, per invocation:
+
+- **Fuel limit** — a CPU-instruction budget that also bounds host-call fan-out (prevents infinite loops and denial-of-wallet). Default 1,000,000.
+- **Memory limit** — maximum linear-memory growth. Default 16 MiB.
+- **Wall-clock timeout** — taken from `[requirements] timeout_secs`, else 30 seconds.
+- **Capabilities** — only those the skill declares (and that parse) are granted; everything else is denied.
+
+---
+
+## Skill Requirements
+
+Skills can declare requirements in the `[requirements]` section:
+
+### Tool Requirements
+
+If your skill needs to call built-in tools (e.g., `web_fetch` to download a page before processing it):
+
+```toml
+[requirements]
+tools = ["web_fetch", "file_read"]
+```
+
+The skill registry validates that the agent has these tools available before loading the skill.
+
+### Capability Requirements
+
+If your skill needs specific capabilities:
+
+```toml
+[requirements]
+capabilities = ["NetConnect(*)", "ShellExec(python3)"]
+```
+
+---
+
+## Installing Skills
+
+### From a Local Directory
+
+```bash
+librefang skill install /path/to/my-skill
+```
+
+This reads the `skill.toml`, validates the manifest, and copies the skill to `~/.librefang/skills/my-skill/`.
+
+### From FangHub
+
+```bash
+librefang skill install web-summarizer
+```
+
+This downloads the skill from the FangHub marketplace registry.
+
+### From a Git Repository
+
+```bash
+librefang skill install https://github.com/user/librefang-skill-example.git
+```
+
+### Listing Installed Skills
+
+```bash
+librefang skill list
+```
+
+Output:
+
+```
+3 skill(s) installed:
+
+NAME                 VERSION    TOOLS    DESCRIPTION
+----------------------------------------------------------------------
+web-summarizer       0.1.0      2        Summarizes any web page into bullet points
+data-analyzer        0.2.1      3        Statistical analysis tools
+code-formatter       1.0.0      1        Format code in 20+ languages
+```
+
+### Removing Skills
+
+```bash
+librefang skill remove web-summarizer
+```
+
+---
+
+## Publishing to FangHub
+
+FangHub is the community skill marketplace for LibreFang.
+
+### Preparing Your Skill
+
+1. Ensure your `skill.toml` has complete metadata:
+   - `name`, `version`, `description`, `author`, `license`, `tags`
+2. Include a `README.md` with usage instructions.
+3. Test your skill locally:
+
+```bash
+librefang skill install /path/to/my-skill
+# Spawn an agent with the skill's tools and test them
+```
+
+### Searching FangHub
+
+```bash
+librefang skill search "web scraping"
+```
+
+Output:
+
+```
+Skills matching "web scraping":
+
+  web-summarizer (42 stars)
+    Summarizes any web page into bullet points
+    https://fanghub.dev/skills/web-summarizer
+
+  page-scraper (28 stars)
+    Extract structured data from web pages
+    https://fanghub.dev/skills/page-scraper
+```
+
+### Publishing
+
+Publishing to FangHub will be available via:
+
+```bash
+librefang skill publish
+```
+
+This validates the manifest, packages the skill, and uploads it to the FangHub registry.
+
+---
+
+## CLI Commands
+
+### Full Skill Command Reference
+
+```bash
+# Install a skill (local directory, FangHub name, or git URL)
+librefang skill install <source>
+
+# List all installed skills
+librefang skill list
+
+# Remove an installed skill
+librefang skill remove <name>
+
+# Search FangHub for skills
+librefang skill search <query>
+
+# Create a new skill scaffold (interactive)
+librefang skill create
+```
+
+### Creating a Skill Scaffold
+
+```bash
+librefang skill create
+```
+
+This interactive command prompts for:
+- Skill name
+- Description
+- Runtime type (python/node/wasm)
+
+It generates:
+
+```
+~/.librefang/skills/my-skill/
+  skill.toml        # Pre-filled manifest
+  src/
+    main.py         # Starter entry point (for Python)
+```
+
+The generated entry point includes a working template that reads JSON from stdin and writes JSON to stdout.
+
+### Using Skills in Agent Manifests
+
+Reference skills in the agent manifest's `skills` field:
+
+```toml
+name = "my-assistant"
+version = "0.1.0"
+description = "An assistant with extra skills"
+author = "librefang"
+module = "builtin:chat"
+skills = ["web-summarizer", "data-analyzer"]
+
+[model]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+
+[capabilities]
+tools = ["file_read", "web_fetch", "summarize_url"]
+memory_read = ["*"]
+memory_write = ["self.*"]
+```
+
+The kernel loads skill tools and prompts at agent spawn time, merging them with the agent's base capabilities.
+
+---
+
+## OpenClaw Compatibility
+
+LibreFang can install and run OpenClaw-format skills. The skill installer auto-detects OpenClaw skills (by looking for `package.json` + `index.ts`/`index.js`) and converts them.
+
+### Automatic Conversion
+
+```bash
+librefang skill install /path/to/openclaw-skill
+```
+
+If the directory contains an OpenClaw-style skill (Node.js package), LibreFang:
+
+1. Detects the OpenClaw format.
+2. Generates a `skill.toml` manifest from `package.json`.
+3. Maps tool names to LibreFang conventions.
+4. Copies the skill to the LibreFang skills directory.
+
+### Manual Conversion
+
+If automatic conversion does not work, create a `skill.toml` manually:
+
+```toml
+[skill]
+name = "my-openclaw-skill"
+version = "1.0.0"
+description = "Converted from OpenClaw"
+
+[runtime]
+type = "node"
+entry = "index.js"
+
+[[tools.provided]]
+name = "my_tool"
+description = "Tool description"
+input_schema = { type = "object", properties = { input = { type = "string" } }, required = ["input"] }
+```
+
+Place this alongside the existing `index.js`/`index.ts` and install:
+
+```bash
+librefang skill install /path/to/skill-directory
+```
+
+Skills imported via `librefang migrate --from openfang` or `librefang migrate --from openclaw` are also scanned and reported in the migration report, with instructions for manual reinstallation.
+
+---
+
+## Skill Self-Evolution
+
+Agents can autonomously create, update, and refine skills based on their execution experience. When an agent discovers a reusable methodology through trial-and-error, it can save the approach as a skill for future reuse.
+
+### How It Works
+
+1. **Automatic detection**: After a complex task (5+ tool calls), the kernel evaluates whether the approach is worth saving as a skill via a background LLM review.
+2. **Agent tools**: Agents have direct access to evolution tools for creating and maintaining skills.
+3. **Hot-reload**: New or updated skills are available immediately -- no daemon restart required.
+4. **Security scanning**: All mutations pass through prompt injection detection. Critical threats trigger automatic rollback.
+
+### Evolution Tools
+
+| Tool | Purpose |
+|------|---------|
+| `skill_evolve_create` | Create a new prompt-only skill from a successful task approach |
+| `skill_evolve_update` | Rewrite a skill's prompt context entirely |
+| `skill_evolve_patch` | Targeted find-and-replace edit with fuzzy matching (tolerates whitespace/indent differences) |
+| `skill_evolve_delete` | Delete a locally-created skill (not marketplace installs) |
+| `skill_evolve_rollback` | Roll back to the previous version |
+| `skill_evolve_write_file` | Add supporting files (references, templates, scripts, assets) |
+| `skill_evolve_remove_file` | Remove a supporting file |
+
+### Version Management
+
+Each skill tracks its evolution in `.evolution.json` alongside `skill.toml`:
+
+- **Version history**: Up to 10 version entries with timestamps, changelogs, and content hashes.
+- **Rollback snapshots**: Previous prompt contexts are saved in `.rollback/` for easy recovery.
+- **Usage tracking**: `use_count` and `evolution_count` metrics per skill.
+
+### Fuzzy Patching
+
+`skill_evolve_patch` uses a 5-strategy matching pipeline (strict to loose):
+
+1. **Exact** -- literal substring match
+2. **Line-trimmed** -- trim leading/trailing whitespace per line
+3. **Whitespace-normalized** -- collapse whitespace runs
+4. **Indent-flexible** -- strip all leading whitespace
+5. **Block-anchor** -- match first+last lines, verify middle similarity &ge;60%
+
+This tolerates the formatting variance typical of LLM-generated edits.
+
+### Supporting Files
+
+Skills can include supporting files under four subdirectories:
+
+- `references/` -- API docs, external references
+- `templates/` -- Code or config templates
+- `scripts/` -- Helper scripts
+- `assets/` -- Images, data files
+
+Files are limited to 1 MiB each, path traversal is blocked, and content is security-scanned on write.
+
+### Dashboard
+
+The Skills page in the dashboard includes:
+
+- **Create Skill** button to create prompt-only skills from the web UI
+- **Skill Detail** modal showing version history, tools, supporting files, and usage metrics
+- **Category filtering** via the `?category=` query parameter
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/skills` | GET | List skills (supports `?category=` filter) |
+| `/api/skills/create` | POST | Create a skill via the evolution module |
+| `/api/skills/{name}` | GET | Get detailed skill info with evolution history |
+| `/api/skills/reload` | POST | Hot-reload the skill registry |
+
+---
+
+## Best Practices
+
+1. **Keep skills focused** -- one skill should do one thing well.
+2. **Declare minimal requirements** -- only request the tools and capabilities your skill actually needs.
+3. **Use descriptive tool names** -- the LLM reads the tool name and description to decide when to use it.
+4. **Provide clear input schemas** -- include descriptions for every parameter so the LLM knows what to pass.
+5. **Handle errors gracefully** -- always return a JSON error object rather than crashing.
+6. **Version carefully** -- use semantic versioning; breaking changes require a major version bump.
+7. **Test with multiple agents** -- verify your skill works with different agent templates and providers.
+8. **Include a README** -- document setup steps, dependencies, and example usage.
+
+

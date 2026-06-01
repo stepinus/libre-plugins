@@ -1,0 +1,5 @@
+.fermata/
+__pycache__/
+*.pyc
+hook-emulation-output.log
+.cate/

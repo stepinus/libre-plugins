@@ -1,0 +1,267 @@
+# 自主 Hands
+
+LibreFang 的核心创新——预构建的自主能力包，独立运行，通过 LLM Agent 执行任务，无需人工干预。
+
+<Note>
+**提示**: Hands 通过 CLI 或 REST API 激活。每个 Hand 会生成一个或多个 Agent，支持交互式对话。
+</Note>
+
+---
+
+## 概述
+
+Hands 是 LibreFang 的独特功能，它们是自主工作的 Agent，可以：
+- 通过 LLM 驱动的 Agent 自动执行任务
+- 处理复杂的多步骤工作流
+- 通过 settings 配置（提供者、模型、API Key 等）
+- 支持单 Agent 或多 Agent 模式
+
+---
+
+## 内置 Hands
+
+| Hand | 功能 | 类型 |
+|------|------|------|
+| **Clip** | YouTube 视频下载、剪辑、字幕生成 | 多 Agent |
+| **Creator** | AI 媒体工作室 — 图像、视频、音乐和语音生成 | 多 Agent |
+| **Lead** | 每日潜在客户发现、信息丰富、0-100 评分、去重 | 多 Agent |
+| **Collector** | OSINT 情报收集、变更检测、知识图谱 | 多 Agent |
+| **Predictor** | 超级预测引擎、置信区间、反向模式 | 单 Agent |
+| **Researcher** | 深度自主研究、CRAAP 可信度评估、APA 引用 | 多 Agent |
+| **Twitter** | 自主 X/Twitter 账号管理、多种内容格式、审批队列 | 多 Agent |
+| **Browser** | Web 自动化、Playwright、强制购买审批 | 单 Agent |
+| **Analytics** | 业务分析、KPI 追踪、自动化报告 | 多 Agent |
+| **ApiTester** | 自动化 API 测试、合约验证、回归检测 | 单 Agent |
+| **DevOps** | CI/CD 监控、部署自动化、基础设施告警、[自动进化](/zh/agent/auto-evolution)（PR review + BMAD bug/feature 流水线） | 多 Agent |
+| **LinkedIn** | LinkedIn 档案监控、外展自动化 | 多 Agent |
+| **Reddit** | Reddit 社区监控、帖子排期、情感追踪 | 多 Agent |
+| **Strategist** | 战略分析、竞争情报、场景规划 | 多 Agent |
+| **Trader** | 市场数据监控、信号生成、投资组合追踪 | 多 Agent |
+
+---
+
+## CLI 命令
+
+### Hand 管理
+
+```bash
+# 列出所有可用的 Hands
+librefang hand list
+
+# 显示当前活跃的 Hand 实例
+librefang hand active
+
+# 查看指定 Hand 的状态
+librefang hand status clip
+
+# 查看 Hand 详细信息
+librefang hand info clip
+
+# 从磁盘重新加载 Hand 定义
+librefang hand reload
+```
+
+### 激活生命周期
+
+```bash
+# 激活 Hand
+librefang hand activate clip
+
+# 暂停运行中的 Hand
+librefang hand pause clip
+
+# 恢复已暂停的 Hand
+librefang hand resume clip
+
+# 停用 Hand
+librefang hand deactivate clip
+```
+
+### 配置
+
+```bash
+# 查看 Hand 当前设置
+librefang hand settings clip
+
+# 设置配置值
+librefang hand set clip stt_provider groq
+```
+
+### 交互
+
+```bash
+# 与活跃的 Hand 进行交互式对话
+librefang hand chat clip
+```
+
+### 依赖管理
+
+```bash
+# 检查依赖状态
+librefang hand check-deps clip
+
+# 安装缺失的依赖
+librefang hand install-deps clip
+```
+
+### 本地安装
+
+```bash
+# 从本地目录安装 Hand
+librefang hand install ./my-hand
+```
+
+---
+
+## Hand 状态
+
+| 状态 | 说明 |
+|------|------|
+| Active | 运行中，Agent 已生成 |
+| Paused | 已暂停，可恢复 |
+| Error | 发生错误，需要干预 |
+| Inactive | 未激活 |
+
+---
+
+## HAND.toml 格式
+
+### 单 Agent Hand
+
+```toml
+id = "my-hand"
+version = "1.0.0"
+name = "My Hand"
+description = "这个 Hand 做什么"
+category = "content"
+icon = "M"
+tools = ["shell_exec", "web_fetch"]
+
+[[requires]]
+key = "ffmpeg"
+label = "FFmpeg must be installed"
+requirement_type = "binary"
+check_value = "ffmpeg"
+
+[[settings]]
+key = "quality"
+label = "Output Quality"
+setting_type = "select"
+default = "high"
+
+[[settings.options]]
+value = "high"
+label = "High (1080p)"
+
+[[settings.options]]
+value = "low"
+label = "Low (480p)"
+
+[agent]
+name = "my-hand-agent"
+description = "Processes tasks"
+system_prompt = "You are a task processing agent."
+
+[agent.model]
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.7
+
+[dashboard]
+metrics = []
+
+[routing]
+aliases = ["my-hand", "process"]
+weak_aliases = ["task", "automate"]
+```
+
+### 多 Agent Hand
+
+```toml
+id = "research"
+version = "2.0.0"
+name = "Research Hand"
+description = "多 Agent 研究系统"
+category = "content"
+tools = ["web_fetch"]
+
+[agents.planner]
+coordinator = true
+invoke_hint = "Use planner for task decomposition"
+name = "planner-agent"
+description = "Plans research tasks"
+model = "default"
+system_prompt = "You plan and coordinate research tasks."
+
+[agents.analyst]
+name = "analyst-agent"
+description = "Analyzes and synthesizes data"
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+system_prompt = "You analyze data and produce insights."
+
+[dashboard]
+metrics = []
+```
+
+### 旧版扁平格式（向后兼容）
+
+单 Agent Hand 可以使用扁平字段代替 `[agent.model]`：
+
+```toml
+[agent]
+name = "my-agent"
+description = "Simple agent"
+provider = "anthropic"
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.7
+system_prompt = "You are a helpful agent."
+```
+
+---
+
+## REST API 端点
+
+### Hand 发现
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/hands` | GET | 列出所有已注册的 Hands 及状态 |
+| `/api/hands/active` | GET | 列出当前活跃的 Hand 实例 |
+| `/api/hands/{hand_id}` | GET | 获取指定 Hand 的详情 |
+| `/api/hands/{hand_id}/activate` | POST | 激活 Hand（生成 Agent） |
+| `/api/hands/{hand_id}/check-deps` | POST | 检查依赖可用性 |
+| `/api/hands/{hand_id}/install-deps` | POST | 安装缺失的依赖 |
+| `/api/hands/reload` | POST | 从磁盘重新加载 Hand 定义 |
+
+### Hand 配置
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/hands/{hand_id}/settings` | GET | 获取当前 Hand 配置 |
+| `/api/hands/{hand_id}/settings` | PUT | 更新 Hand 配置 |
+
+### 实例生命周期
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/hands/instances/{id}/pause` | POST | 暂停运行中的 Hand 实例 |
+| `/api/hands/instances/{id}/resume` | POST | 恢复已暂停的 Hand 实例 |
+| `/api/hands/instances/{id}` | DELETE | 停用并移除 Hand 实例 |
+| `/api/hands/instances/{id}/message` | POST | 向 Hand 实例发送消息 |
+
+### 示例：激活并对话
+
+```bash
+# 激活
+curl -X POST http://127.0.0.1:4545/api/hands/clip/activate
+
+# 发送消息
+curl -X POST http://127.0.0.1:4545/api/hands/instances/<instance-id>/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "下载这个视频并生成字幕"}'
+```
+
+---

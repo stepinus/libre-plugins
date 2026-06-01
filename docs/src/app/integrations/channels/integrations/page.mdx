@@ -1,0 +1,338 @@
+# Integrations & Protocol Channels
+
+Messaging platform integrations, protocol adapters, and webhook-based channels.
+
+---
+
+## LINE
+
+LINE now ships as the `librefang.sidecar.adapters.line` Python sidecar (the in-process Rust adapter was removed in the sidecar migration). The sidecar runs **its own HTTP webhook server**, so the URL you register at the LINE Developers Console must point at the sidecar host/port, not the LibreFang API port.
+
+### Prerequisites
+
+- A LINE Messaging API channel (from the [LINE Developers Console](https://developers.line.biz/en/docs/messaging-api/))
+- The `librefang` Python SDK installed where the sidecar will run
+- A publicly accessible webhook URL pointing at the sidecar (typical pattern: an HTTPS reverse proxy in front of the sidecar's `LINE_WEBHOOK_PORT`)
+
+### Setup
+
+1. Go to the [LINE Developers Console](https://developers.line.biz/console/) and create a new Messaging API channel.
+2. Note the **Channel Secret** and issue a **Channel Access Token**.
+3. Set both secrets in `~/.librefang/secrets.env` (or via the dashboard's "Set API Key" button, which writes the same file):
+
+```bash
+LINE_CHANNEL_SECRET=your-secret
+LINE_CHANNEL_ACCESS_TOKEN=your-access-token
+```
+
+4. Declare the sidecar in `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "line"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.line"]
+channel_type = "line"
+default_agent = "assistant"
+[sidecar_channels.env]
+LINE_WEBHOOK_PORT = "9090"
+# LINE_WEBHOOK_PATH = "/webhook"
+# LINE_ACCOUNT_ID = "production"   # optional, multi-bot routing key
+```
+
+5. In the LINE Developers Console, set the webhook URL to your sidecar host (e.g., `https://your-sidecar-host:9090/webhook`).
+6. Restart the daemon — the supervisor launches the sidecar, which validates the access token via `GET /v2/bot/info` at startup and then accepts inbound webhook POSTs.
+
+### How It Works
+
+The sidecar runs as a supervised subprocess of LibreFang. It serves a standalone HTTP webhook endpoint on `LINE_WEBHOOK_PORT` (default `9090`) and `LINE_WEBHOOK_PATH` (default `/webhook`), verifies every inbound POST's `X-Line-Signature` HMAC-SHA256 over the raw request body (missing → 400, mismatched → 401), and forwards parsed `message` events to the kernel via newline-delimited JSON-RPC over stdio. Outbound responses go through `POST /v2/bot/message/push` with the Bearer access token; 429 responses honour `Retry-After` and chunk-level fail-open keeps a single throttled chunk from dropping the rest of a multi-part reply.
+
+---
+
+## DingTalk
+
+DingTalk is provided by the Python sidecar adapter (`librefang.sidecar.adapters.dingtalk`), **stream mode only**. The in-process `[channels.dingtalk]` config block was removed in the sidecar migration; declare DingTalk as a `[[sidecar_channels]]` entry instead. The legacy in-process `webhook` mode (HMAC-SHA256 over `timestamp + secret + body`) is NOT ported — switch the robot to stream subscription in the DingTalk admin console.
+
+### Prerequisites
+
+- A DingTalk application from the [DingTalk Open Platform](https://open.dingtalk.com/document/)
+- App Key and App Secret from your DingTalk application
+- `python3` on the daemon host (no third-party packages required — stdlib-only sidecar)
+
+### Setup
+
+1. Go to the [DingTalk Open Platform](https://open.dingtalk.com/), create an application (or use an existing one).
+2. Enable the **Robot** capability and note the **App Key** (Client ID) and **App Secret** (Client Secret).
+3. Add to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "dingtalk"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.dingtalk"]
+channel_type = "dingtalk"
+[sidecar_channels.env]
+DINGTALK_APP_KEY = "dingxxx..."
+# DINGTALK_ACCOUNT_ID = "prod-bot"     # optional, multi-bot routing key
+# DINGTALK_ROBOT_CODE = ""             # optional, defaults to app_key
+```
+
+4. Put `DINGTALK_APP_SECRET` in `~/.librefang/secrets.env` (the dashboard's Channels page writes it for you).
+5. Restart the daemon.
+
+### How It Works
+
+The sidecar registers with the DingTalk gateway via `POST /v1.0/gateway/connections/open` to obtain a WebSocket endpoint + ticket, opens the WS connection, ACKs every CALLBACK frame inline, and posts replies to the per-message `sessionWebhook` URL that DingTalk delivers with each inbound event. Heartbeat SYSTEM ping/pong is handled automatically. Reconnect is 3 → 60 s exponential backoff.
+
+---
+
+## QQ (sidecar)
+
+QQ migrated from an in-process Rust adapter to an out-of-process Python sidecar (`librefang.sidecar.adapters.qq`).
+
+### Prerequisites
+
+- A QQ Bot registered on the [QQ Bot Platform](https://bot.q.qq.com/wiki/) with App ID and App Secret.
+- Python 3 + the `librefang` SDK (`pip install -e sdk/python`).
+
+### Setup
+
+1. Register a bot on the QQ Open Platform and note the `App ID` + `App Secret`.
+2. Put the secret in `~/.librefang/secrets.env`:
+
+```bash
+QQ_APP_SECRET=your-app-secret
+```
+
+3. Declare the sidecar in `~/.librefang/config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "qq"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.qq"]
+channel_type = "qq"
+default_agent = "assistant"
+[sidecar_channels.env]
+QQ_APP_ID = "your-app-id"
+# QQ_ALLOWED_USERS = "openid-1,openid-2"   # optional
+# QQ_ACCOUNT_ID = "prod-bot"               # optional
+# QQ_INTENTS = "1073746435"                # optional bitmask override
+```
+
+4. Restart the daemon.
+
+### How It Works
+
+The sidecar fetches an access token from `https://bots.qq.com/app/getAppAccessToken`, discovers the WebSocket gateway via `GET /gateway`, then maintains a persistent WS connection through the HELLO → IDENTIFY → READY handshake with periodic heartbeats. Inbound `MESSAGE_CREATE` / `AT_MESSAGE_CREATE` / `DIRECT_MESSAGE_CREATE` / `GROUP_AT_MESSAGE_CREATE` / `C2C_MESSAGE_CREATE` dispatch events are surfaced to the kernel; outbound replies use `POST {api_base}{reply_endpoint}` with the inbound `msg_id` as the passive-reply target.
+
+---
+
+## WeCom (sidecar)
+
+WeCom (WeChat Work / Enterprise WeChat) migrated from an in-process Rust adapter to an out-of-process Python sidecar (`librefang.sidecar.adapters.wecom`). The legacy callback mode (HTTP webhook + AES-CBC-256 inbound decryption) is no longer supported — Python's stdlib has no AES, and the sidecar SDK is stdlib-only by policy. Operators who relied on callback mode must switch the bot to WebSocket mode in the WeCom admin console.
+
+### Prerequisites
+
+- A WeCom enterprise account with an **intelligent bot** created from the [WeCom Admin Console](https://work.weixin.qq.com/)
+- `librefang-sdk` installed in the Python environment that runs the sidecar (`pip install -e sdk/python` from the repo root, or `pip install librefang-sdk` once the package is published)
+
+### Setup
+
+1. In the WeCom admin console, go to **Apps > Create App** and select **Intelligent Bot**. Note the **Bot ID** and **Secret** from the bot settings page.
+2. Put the secret in `~/.librefang/secrets.env`:
+
+```bash
+WECOM_BOT_SECRET=your-bot-secret
+```
+
+3. Add the sidecar to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "wecom"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.wecom"]
+channel_type = "wecom"
+
+[sidecar_channels.env]
+WECOM_BOT_ID = "aibxxxxxxx"
+# WECOM_ALLOWED_USERS = "alice,bob"   # optional CSV; empty = all
+# WECOM_ACCOUNT_ID    = "prod-bot"    # optional multi-bot routing
+```
+
+4. Restart the daemon.
+
+### How It Works
+
+The WeCom sidecar connects to `wss://openws.work.weixin.qq.com` via a persistent WebSocket, subscribes with `cmd: "aibot_subscribe"` carrying the Bot ID and Secret, and sends a `cmd: "ping"` heartbeat every 30 s. Inbound messages arrive as `cmd: "aibot_msg_callback"` JSON frames; replies use `cmd: "aibot_respond_msg"` (passive reply to a cached inbound `req_id`, one-shot) or `cmd: "aibot_send_msg"` (proactive). Outbound bodies are always `msgtype: "markdown"` since the intelligent-bot `aibot_respond_msg` does not accept `msgtype: "text"`. Inbound `req_id`s are deduped via a bounded set (capacity 10000 / evict 5000) so a WS reconnect that races with platform redelivery does not double-emit.
+
+---
+
+## Ntfy
+
+### Prerequisites
+
+- Access to an [ntfy](https://docs.ntfy.sh) server (self-hosted or the public instance at `ntfy.sh`)
+
+### Setup
+
+1. Choose a topic name on your ntfy server.
+2. Set environment variables:
+
+```bash
+export NTFY_URL=https://ntfy.sh               # Environment variable
+export NTFY_TOPIC=my-librefang-topic
+# export NTFY_TOKEN=your-access-token         # Optional
+librefang vault set NTFY_URL                  # Encrypted vault (recommended)
+librefang vault set NTFY_TOPIC
+# librefang vault set NTFY_TOKEN              # Optional
+librefang config set-key ntfy                 # .env file
+# Or set via dashboard "Set API Key" button   # secrets.env
+```
+
+3. Add to config (ntfy runs as an out-of-process sidecar adapter, `librefang.sidecar.adapters.ntfy`):
+
+```toml
+[[sidecar_channels]]
+name = "ntfy"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.ntfy"]
+channel_type = "ntfy"
+[sidecar_channels.env]
+NTFY_SERVER_URL = "https://ntfy.sh"
+NTFY_TOPIC = "my-agent-topic"
+# NTFY_ACCOUNT_ID = "assistant"      # optional, multi-bot routing
+```
+
+`NTFY_TOKEN` (auth, optional for public topics) belongs in `~/.librefang/secrets.env`.
+
+4. Hot-reload (`curl -X POST http://127.0.0.1:4545/api/channels/reload`) or restart the daemon.
+
+### How It Works
+
+The sidecar subscribes to the topic on the ntfy server using Server-Sent Events (SSE) for real-time message delivery. Incoming messages are routed to the configured agent, and responses are published back to the topic via the ntfy REST API.
+
+---
+
+## Gotify
+
+Gotify runs as an out-of-process Python sidecar adapter (`librefang.sidecar.adapters.gotify`, ships in `librefang-sdk`).
+
+### Prerequisites
+
+- A Gotify server instance.
+- An **application** token (used to publish) and a **client** token (used to subscribe via WebSocket) — both created in the Gotify web UI.
+
+### Setup
+
+1. In the Gotify web UI, create an Application and copy its token (this becomes `GOTIFY_APP_TOKEN`); create a Client and copy its token (this becomes `GOTIFY_CLIENT_TOKEN`).
+2. Open the dashboard Channels page, pick Gotify, and fill in the server URL and both tokens — the dashboard writes `GOTIFY_APP_TOKEN` / `GOTIFY_CLIENT_TOKEN` to `~/.librefang/secrets.env` and `GOTIFY_SERVER_URL` to the `[sidecar_channels.env]` table in `~/.librefang/config.toml`. Equivalent manual config:
+
+```toml
+[[sidecar_channels]]
+name = "gotify"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.gotify"]
+channel_type = "gotify"
+[sidecar_channels.env]
+GOTIFY_SERVER_URL = "https://gotify.example.com"
+# GOTIFY_ACCOUNT_ID = "prod"    # optional, multi-bot routing key
+```
+
+3. The daemon supervises the sidecar — no manual restart is needed; the kernel's hot-reload spawns or replaces the subprocess on config change.
+
+### How It Works
+
+The Gotify sidecar connects to `wss://{server}/stream?token={client_token}` to receive Gotify push messages in real time and POSTs back to `{server}/message?token={app_token}` to publish. The WebSocket client is a stdlib-only RFC 6455 reader on `socket` + `ssl` (no third-party dependency).
+
+---
+
+## Nextcloud Talk
+
+Nextcloud Talk is provided by the Python sidecar adapter (`librefang.sidecar.adapters.nextcloud`). The in-process `[channels.nextcloud]` config block was removed in the sidecar migration. Declare Nextcloud as a `[[sidecar_channels]]` entry instead.
+
+### Prerequisites
+
+- A Nextcloud instance with the Talk app installed (see [Nextcloud Talk API docs](https://nextcloud-talk.readthedocs.io/))
+- An app password or bot user account
+- Python 3.8+ on the daemon host (the sidecar runs as `python3 -m librefang.sidecar.adapters.nextcloud`)
+
+### Setup
+
+1. In Nextcloud, go to **Settings > Security > Devices & sessions** and create an app password (or create a dedicated bot user).
+2. Add the sidecar entry to your `config.toml`:
+
+```bash
+[[sidecar_channels]]
+name = "nextcloud"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.nextcloud"]
+channel_type = "nextcloud"
+[sidecar_channels.env]
+NEXTCLOUD_SERVER_URL = "https://cloud.example.com"
+# NEXTCLOUD_ROOMS = "abc123,def456"           # optional; empty = all joined
+# NEXTCLOUD_ACCOUNT_ID = "prod"               # optional, multi-bot routing key
+# NEXTCLOUD_POLL_INTERVAL_SECS = "3"          # optional, default 3, floor 1
+```
+
+3. Put `NEXTCLOUD_TOKEN` (the app password) in `~/.librefang/secrets.env` — the dashboard's Channels page writes it there when you fill the Nextcloud form.
+4. Restart the daemon.
+
+### How It Works
+
+The sidecar polls `GET /ocs/v2.php/apps/spreed/api/v1/chat/<token>?lookIntoFuture=1` per room at the configured interval (default 3 s) using Bearer auth plus the mandatory `OCS-APIRequest: true` header. Slash-command bodies (`/cmd args`) become `Command` events; everything else is plain text. Outbound replies go through `POST /ocs/v2.php/apps/spreed/api/v1/chat/<token>` with a form-encoded body and thread correctly via the `replyTo` parameter when the inbound message lived inside a thread (improvement over the former Rust adapter, which never sent `replyTo`).
+
+---
+
+## Webhook (sidecar)
+
+Webhook migrated from the in-process Rust adapter to a Python sidecar (`librefang.sidecar.adapters.webhook`, stdlib-only). Same HMAC-SHA256 + timestamp + SSRF-guard semantics, plus inbound dedupe on `message_id` and 429 `Retry-After` that the Rust adapter didn't have.
+
+### Prerequisites
+
+- An optional target URL that accepts HTTP POST requests, for outbound delivery
+- A shared HMAC-SHA256 secret
+- `python3` on the daemon host (no third-party packages required)
+
+### Setup
+
+1. Choose a shared secret for HMAC-SHA256 signature verification.
+2. Add to `config.toml`:
+
+```toml
+[[sidecar_channels]]
+name = "webhook"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webhook"]
+channel_type = "webhook"
+[sidecar_channels.env]
+WEBHOOK_LISTEN_PORT = "8461"
+# WEBHOOK_LISTEN_PATH = "/webhook"
+# WEBHOOK_CALLBACK_URL = "https://your-service.example.com/hook"
+```
+
+3. Put `WEBHOOK_SECRET` in `~/.librefang/secrets.env`.
+4. Restart the daemon.
+
+### How It Works
+
+The sidecar runs its own `BaseHTTPRequestHandler`-over-`ThreadingTCPServer` listener on `WEBHOOK_LISTEN_PORT`. Incoming POSTs are verified by HMAC-SHA256 (`X-Webhook-Signature: sha256=<hex>`) over the raw request body, with an optional `X-Webhook-Timestamp` (milliseconds since epoch, ±5 min skew) for replay protection. Outbound replies go to `WEBHOOK_CALLBACK_URL` (when set) signed the same way. The SSRF guard rejects private / loopback / link-local / multicast / cloud-metadata callback URLs at startup AND on every outbound POST.
+
+### `deliver_only` Pass-through Mode
+
+The webhook sidecar can run as a zero-LLM pass-through: incoming payloads bypass the agent loop entirely (no sanitiser, no rate limiter, no agent lookup) and forward straight to a target channel.
+
+```toml
+[[sidecar_channels]]
+name = "webhook"
+command = "python3"
+args = ["-m", "librefang.sidecar.adapters.webhook"]
+channel_type = "webhook"
+[sidecar_channels.env]
+WEBHOOK_LISTEN_PORT = "8461"
+WEBHOOK_DELIVER_ONLY = "1"
+WEBHOOK_DELIVER = "telegram:123456789"  # required when WEBHOOK_DELIVER_ONLY=1
+```
+
+The sidecar **fail-closes at startup** when `WEBHOOK_DELIVER_ONLY=1` but `WEBHOOK_DELIVER` is empty — the Rust validator at the same path only warn-and-continued, leaving inbound messages silently dropped at runtime. See [Webhook `deliver_only` Mode](/integrations/channels#webhook-deliver_only-mode) on the channels overview for the internal `__deliver_only__` / `__deliver_target__` metadata signalling that the kernel's `bridge.rs` reads to short-circuit the LLM call.

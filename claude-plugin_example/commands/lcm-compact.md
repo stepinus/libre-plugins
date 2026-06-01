@@ -1,0 +1,37 @@
+---
+name: lcm-compact
+description: Compact conversation messages into DAG summary nodes.
+user_invocable: true
+---
+
+# /lcm-compact
+
+Compact unprocessed conversation messages into summarized DAG nodes.
+
+## Instructions
+
+Run the following command via Bash:
+
+```bash
+lcm compact
+```
+
+If `lcm` is not on PATH (marketplace install), use the plugin-relative binary instead:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/lcm.mjs" compact
+```
+
+### Options
+
+Pass user-specified flags through to the command:
+- `--all` — Compact all projects (default: current project only). Forces batch compaction mode regardless of TTY environment, ensuring reliable behavior in automated tools.
+- `--dry-run` — Preview without writing
+- `--replay` — Re-compact sessions that already have summaries (by default, already-compacted sessions are skipped)
+
+For example:
+- `/lcm-compact --all` → `lcm compact --all`
+- `/lcm-compact --dry-run` → `lcm compact --dry-run`
+- `/lcm-compact --replay` → `lcm compact --replay`
+
+Display the output verbatim.
