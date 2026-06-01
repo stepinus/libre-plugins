@@ -19,10 +19,15 @@ assemble = "hooks/assemble.py"
 binary = "python3"
 install_hint = "Install Python 3.9+"
 
-[[requires]]
-binary = "lcm"
-install_hint = "npm install -g @lossless-claude/lcm"
-optional = false
+[integrity]
+"hooks/after_turn.py" = "..."
+"hooks/ingest.py" = "..."
+"hooks/bootstrap.py" = "..."
+"hooks/compact.py" = "..."
+"hooks/assemble.py" = "..."
+
+[mcp]
+catalog = "mcp/lcm-catalog.toml"
 
 [i18n.zh]
 name = "无损上下文"
