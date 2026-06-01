@@ -98,6 +98,8 @@ def _snippets_from(messages: list, max_snippets: int = MAX_SNIPPETS) -> List[str
     """Build summary snippets: role + first 180 chars per message."""
     snippets: List[str] = []
     for m in messages[:max_snippets]:
+        if not isinstance(m, dict):
+            continue
         role = str(m.get("role", "msg"))
         content = _extract_text(m)
         if not content:
