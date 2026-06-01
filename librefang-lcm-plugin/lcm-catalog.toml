@@ -1,0 +1,52 @@
+id = "lcm"
+name = "LCM (Lossless Context Memory)"
+description = "Cross-session memory that stores decisions, patterns, errors, and architecture knowledge. Agents recall what they built in past sessions using native Python SQLite backend."
+category = "ai"
+icon = "🧠"
+tags = ["memory", "context", "cross-session", "decisions", "patterns", "lcm", "fts5"]
+
+[transport]
+type = "stdio"
+command = "python3"
+args = ["mcp_server.py"]
+
+[health_check]
+interval_secs = 60
+unhealthy_threshold = 3
+
+setup_instructions = """
+LCM MCP server works directly with SQLite — no daemon needed.
+
+1. Install the LCM plugin:
+```bash
+librefang plugin install lcm
+```
+
+2. Add to your agent config:
+```toml
+[[mcp_servers]]
+name = "lcm"
+
+[mcp_servers.transport]
+type = "stdio"
+command = "python3"
+args = ["~/.librefang/plugins/lcm/mcp_server.py"]
+env = []
+```
+
+The database is at `~/.librefang/lcm-context/lcm.db` by default.
+Set `LFRANG_LCM_DB_PATH` to change location.
+
+### Available tools
+
+- `lcm_search` — FTS5 search across all past messages
+- `lcm_promote` — Save a reusable insight (decision, pattern, fix)
+- `lcm_summaries` — Read DAG summary nodes
+- `lcm_stats` — Database statistics
+
+### Environment
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LFRANG_LCM_DB_PATH` | `~/.librefang/lcm-context/lcm.db` | Database location |
+"""
